@@ -1,0 +1,8 @@
+{
+  "name": "kwos-session-bus",
+  "version": "0.1.0",
+  "description": "MCP-Client für den kw/OS Session Message Relay — Nachrichtenaustausch zwischen Claude-Code-Sessions. MVP: list_sessions, send_message, broadcast; Registrierung, Heartbeat und Empfang laufen automatisch im Hintergrund.",
+  "author": {
+    "name": "S&P Solutions GmbH"
+  }
+}

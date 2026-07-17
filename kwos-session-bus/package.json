@@ -1,0 +1,11 @@
+{
+  "name": "kwos-session-bus",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Lokaler stdio-MCP-Server, der die kw/OS Session-Relay-REST/SSE-Schnittstelle (Workitem-9831619 §4) auf MCP-Tools abbildet (Workitem-9831620).",
+  "main": "server/index.js",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}

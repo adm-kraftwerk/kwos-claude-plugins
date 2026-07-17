@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "kraftwerk-os": {
+      "type": "http",
+      "url": "https://os.kraftwerk.io/mcp",
+      "oauth": {
+        "clientId": "mcp_kos",
+        "authServerMetadataUrl": "https://xid.supinfo.de/.well-known/openid-configuration",
+        "callbackPort": 54545
+      }
+    },
+    "bc365": {
+      "type": "http",
+      "url": "https://oscar.msu-solutions.de/bc-explorer/mcp",
+      "oauth": {
+        "clientId": "bc365",
+        "authServerMetadataUrl": "https://oscar.msu-solutions.de/bc-explorer/.well-known/oauth-authorization-server"
+      }
+    }
+  }
+}

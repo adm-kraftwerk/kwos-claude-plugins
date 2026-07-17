@@ -1,0 +1,12 @@
+{
+  "name": "kw-branding",
+  "version": "1.0.0",
+  "description": "Branding-Plugin fuer kraftwerk — enthaelt den /kw-branding:kraftwerk-colouring Skill sowie alle offiziellen Design-Assets (Tokens, Logos, Sphaeren)",
+  "author": {
+    "name": "S&P Solutions GmbH"
+  },
+  "homepage": "https://os.kraftwerk.io/plugin/ai-observability",
+  "repository": "https://os.kraftwerk.io/plugin/ai-observability",
+  "license": "MIT",
+  "keywords": ["branding", "kraftwerk", "colors", "design-tokens", "css", "scss"]
+}

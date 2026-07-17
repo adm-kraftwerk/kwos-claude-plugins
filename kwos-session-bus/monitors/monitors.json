@@ -1,0 +1,6 @@
+{
+  "session-bus-listener": {
+    "command": "node ${CLAUDE_PLUGIN_ROOT}/server/listen.js",
+    "description": "Empfängt Nachrichten vom kw/OS Session Relay via SSE und liefert sie als Notification"
+  }
+}

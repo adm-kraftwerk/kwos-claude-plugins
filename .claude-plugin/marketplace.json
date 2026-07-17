@@ -1,0 +1,29 @@
+{
+  "name": "kraftwerk-tools",
+  "owner": {
+    "name": "S&P Solutions GmbH"
+  },
+  "metadata": {
+    "description": "Internal Claude Code plugins for Kraftwerk kw/OS integration"
+  },
+  "plugins": [
+    {
+      "name": "kraftwerkos",
+      "source": { "source": "git-subdir", "url": "https://github.com/adm-kraftwerk/kwos-claude-plugins", "path": "kraftwerkos", "ref": "main" },
+      "description": "Claude Code session tracking — traces token usage per workitem to Langfuse",
+      "version": "0.30.0"
+    },
+    {
+      "name": "kw-branding",
+      "source": { "source": "git-subdir", "url": "https://github.com/adm-kraftwerk/kwos-claude-plugins", "path": "kw-branding", "ref": "main" },
+      "description": "Kraftwerk branding — kraftwerk-colouring skill with official design assets, color palette, and visual identity references",
+      "version": "1.0.0"
+    },
+    {
+      "name": "kwos-session-bus",
+      "source": { "source": "git-subdir", "url": "https://github.com/adm-kraftwerk/kwos-claude-plugins", "path": "kwos-session-bus", "ref": "main" },
+      "description": "MCP client for the kw/OS Session Message Relay — MVP messaging between Claude Code sessions (list_sessions, send_message, broadcast)",
+      "version": "0.1.0"
+    }
+  ]
+}
