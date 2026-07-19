@@ -24,6 +24,11 @@
       "source": { "source": "git-subdir", "url": "https://github.com/adm-kraftwerk/kwos-claude-plugins", "path": "kwos-session-bus", "ref": "main" },
       "description": "MCP client for the kw/OS Session Message Relay — MVP messaging between Claude Code sessions (list_sessions, send_message, broadcast)",
       "version": "0.1.0"
+    },
+    {
+      "name": "frontend-design",
+      "source": { "source": "git-subdir", "url": "https://github.com/anthropics/claude-code", "path": "plugins/frontend-design", "ref": "main" },
+      "description": "Guidance for distinctive, intentional visual design when building or reshaping UI (mirrored from anthropics/claude-code)"
     }
   ]
 }
