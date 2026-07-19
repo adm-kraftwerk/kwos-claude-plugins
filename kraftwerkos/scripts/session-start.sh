@@ -5,6 +5,12 @@
 #   1. Local setup — CLAUDE.md injection + sh hook scripts to ~/.kwos/
 #   2. Server call — POST session-start body; output response (session ID + workitem carry)
 
+# On Windows the PowerShell hook entry (session-start.ps1) handles this event.
+# Exit immediately when running under Git Bash to avoid double execution.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
+esac
+
 BODY=$(cat)  # drain stdin before any early exit; forwarded to server
 
 MARKER='<!-- kraftwerkOS -->'
