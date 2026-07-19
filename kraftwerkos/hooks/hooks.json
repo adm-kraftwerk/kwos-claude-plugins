@@ -6,8 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/session-start.sh",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/session-start.sh",
             "timeout": 10
           }
         ]
@@ -19,8 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/session-end.sh",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/session-end.sh",
             "timeout": 10
           }
         ]
