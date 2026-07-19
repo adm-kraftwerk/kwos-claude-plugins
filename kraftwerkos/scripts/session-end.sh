@@ -3,12 +3,6 @@
 # Forwards session-end event to the plugin server so it can store carry state
 # (workitem_id keyed by hash(cwd)) for persistence across /clear sessions.
 
-# On Windows the PowerShell hook entry (session-end.ps1) handles this event.
-# Exit immediately when running under Git Bash to avoid double execution.
-case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*|CYGWIN*) exit 0 ;;
-esac
-
 BODY=$(cat)
 PLUGIN_URL="${KWOS_PLUGIN_URL%/}"
 [ -z "$PLUGIN_URL" ] && exit 0

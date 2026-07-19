@@ -1,6 +1,6 @@
 {
   "name": "kraftwerkos",
-  "version": "0.30.3",
+  "version": "0.30.4",
   "description": "Claude Code session tracking — traces token usage per workitem to Langfuse",
   "author": {
     "name": "S&P Solutions GmbH"

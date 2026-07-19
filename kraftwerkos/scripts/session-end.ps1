@@ -6,6 +6,13 @@
 
 $ErrorActionPreference = 'SilentlyContinue'
 
+# Fallback only: when bash is on PATH, the (faster) bash hook entry runs
+# session-end.sh and does the work. Exit immediately to avoid double execution
+# and to skip PowerShell's slow cold start (which can be cancelled during the
+# short SessionEnd teardown window). This entry does the work solely on Windows
+# machines without a discoverable bash.
+if (Get-Command bash -ErrorAction SilentlyContinue) { exit 0 }
+
 $body = ''
 try { $body = [Console]::In.ReadToEnd() } catch { }
 

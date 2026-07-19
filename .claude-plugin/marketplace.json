@@ -11,7 +11,7 @@
       "name": "kraftwerkos",
       "source": { "source": "git-subdir", "url": "https://github.com/adm-kraftwerk/kwos-claude-plugins", "path": "kraftwerkos", "ref": "main" },
       "description": "Claude Code session tracking — traces token usage per workitem to Langfuse",
-      "version": "0.30.3"
+      "version": "0.30.4"
     },
     {
       "name": "kw-branding",
