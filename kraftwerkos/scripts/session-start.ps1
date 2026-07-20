@@ -1,11 +1,14 @@
-# session-start.ps1 — Claude Code SessionStart hook (Windows)
+# session-start.ps1 - Claude Code SessionStart hook (Windows)
 #
 # PowerShell counterpart to session-start.sh, registered as the second (powershell)
-# hook entry. On Windows machines where Claude Code cannot discover Git Bash, the
-# bash entry fails to spawn (or exits via its uname guard) and this script does the
-# work instead. Mirrors session-start.sh exactly:
-#   1. Local setup — CLAUDE.md injection + hook scripts copied to ~\.kwos\
-#   2. Server call — POST session-start body; emit response (session ID + workitem carry)
+# hook entry. On Windows machines where no bash is on PATH, the bash entry fails to
+# spawn and this script does the work instead. Mirrors session-start.sh:
+#   1. Local setup - CLAUDE.md injection + hook scripts copied to ~\.kwos\
+#   2. Server call - POST session-start body; emit response (session ID + workitem carry)
+#
+# NOTE: keep this file pure ASCII. It is launched via Windows PowerShell 5.1, which
+# reads BOM-less scripts as ANSI/Windows-1252 - any non-ASCII byte (em dash, box
+# drawing, umlaut) corrupts the parse. ASCII-only avoids the whole encoding problem.
 
 $ErrorActionPreference = 'SilentlyContinue'
 
@@ -24,9 +27,9 @@ $claudeMd  = Join-Path $env:USERPROFILE '.claude\CLAUDE.md'
 $kwosDir   = Join-Path $env:USERPROFILE '.kwos'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-$instruction = "$marker`n## kw/OS Workitem Tracking`nAt the start of each session, ask the user ""Which kw/OS workitem are you working on?"" then use ToolSearch with query ""setSessionWorkitem"" to load the MCP tool schema, and call it with their workitemId and the session ID from your context. Never use Bash or shell scripts to set the workitem — it is always a deferred MCP tool. Only ask once per session.`n$marker"
+$instruction = "$marker`n## kw/OS Workitem Tracking`nAt the start of each session, ask the user ""Which kw/OS workitem are you working on?"" then use ToolSearch with query ""setSessionWorkitem"" to load the MCP tool schema, and call it with their workitemId and the session ID from your context. Never use Bash or shell scripts to set the workitem - it is always a deferred MCP tool. Only ask once per session.`n$marker"
 
-# ── 1. Local setup (CLAUDE.md injection + copy hook scripts) ──────────────────
+# --- 1. Local setup (CLAUDE.md injection + copy hook scripts) ---
 
 $markerCount = 0
 if (Test-Path $claudeMd) {
@@ -61,7 +64,7 @@ if (-not ($markerCount -eq 2 -and $scriptsPresent)) {
     } catch { }
 }
 
-# ── 2. Server call (session registration + carry lookup) ──────────────────────
+# --- 2. Server call (session registration + carry lookup) ---
 
 $pluginUrl = ($env:KWOS_PLUGIN_URL -replace '/$', '')
 if ($pluginUrl) {

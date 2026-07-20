@@ -1,8 +1,11 @@
-# session-end.ps1 — Claude Code SessionEnd hook (Windows)
+# session-end.ps1 - Claude Code SessionEnd hook (Windows)
 #
 # PowerShell counterpart to session-end.sh, registered as the second (powershell)
 # hook entry. Forwards the session-end event to the plugin server so it can store
 # carry state (workitem_id keyed by hash(cwd)) for persistence across /clear sessions.
+#
+# NOTE: keep this file pure ASCII. It is launched via Windows PowerShell 5.1, which
+# reads BOM-less scripts as ANSI/Windows-1252 - any non-ASCII byte corrupts the parse.
 
 $ErrorActionPreference = 'SilentlyContinue'
 
