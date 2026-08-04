@@ -17,23 +17,28 @@ SCRIPT_DIR="$(dirname "$0")"
 # nur neu geschrieben, wenn er fehlt oder der Fingerabdruck nicht passt. (Vorher wurde
 # ausschliesslich die Marker-ANZAHL geprueft -> eine Textaenderung war ein stiller No-Op fuer
 # jeden, der den Block schon hatte.)
-SENTINEL='kw/OS Workitem Tracking (v2)'
+SENTINEL='kw/OS Workitem Tracking (v3)'
 
-# Die Instruktion ist BEDINGT: in kwclaude-Sessions steht das Workitem beim Start fest (Launcher
-# setzt KWOS_WORKITEM, der Gateway erzwingt es serverseitig mit 403) -- eine Rueckfrage ist dort
-# sinnlos. Der Block liegt in einer DAUERHAFTEN Datei, die beide Welten lesen; deshalb wird die
+# Die Instruktion ist BEDINGT, aber NUR an KWOS_WORKITEM: in kwclaude-Sessions steht das Workitem
+# beim Start fest (Launcher setzt es, Gateway erzwingt es mit 403) -- eine Rueckfrage ist sinnlos.
+# BEWUSST NICHT als Abbruchbedingung: ein per Carry uebernommenes Workitem. Das trifft in plain
+# claude regelmaessig zu (der Server liefert den Carry frueherer Sessions mit) -> die Frage waere
+# dort weggefallen und die Arbeit still auf ein Workitem von gestern gebucht. DASSELBE PLUGIN
+# laeuft in beiden Welten (eine Marketplace-Quelle), also trifft jede Textaenderung auch plain
+# claude. Der Block liegt in einer DAUERHAFTEN Datei, die beide Welten lesen; deshalb wird die
 # Bedingung im TEXT formuliert und nicht beim Schreiben ausgewertet (sonst wuerde der in einer
 # kwclaude-Session geschriebene Stand in plain-claude-Sessions weitergelten und umgekehrt).
 INSTRUCTION="${MARKER}
 ## ${SENTINEL}
-First check whether the workitem is already determined — if so, do NOT ask. It is determined when
-the [kraftwerkOS] block in your context already names a linked workitem, or when the environment
-variable KWOS_WORKITEM is set (session started via \`kwclaude\`: the launcher binds the workitem and
-the gateway enforces it server-side).
-Only if neither holds (plain \`claude\`, no gateway): ask once \"Which kw/OS workitem are you working
-on?\", then use ToolSearch with query \"setSessionWorkitem\" to load the MCP tool schema and call it
-with their workitemId and the session ID from your context. Never use Bash or shell scripts to set
-the workitem — it is always a deferred MCP tool. Only ask once per session.
+Skip the question ONLY when the environment variable KWOS_WORKITEM is set (session started via
+\`kwclaude\`: the launcher binds the workitem for this session and the gateway enforces it
+server-side, so an answer could not change the booking).
+Otherwise (plain \`claude\`, no gateway) ask once \"Which kw/OS workitem are you working on?\", then
+use ToolSearch with query \"setSessionWorkitem\" to load the MCP tool schema and call it with their
+workitemId and the session ID from your context. Never use Bash or shell scripts to set the
+workitem — it is always a deferred MCP tool. Only ask once per session.
+A workitem CARRIED OVER from an earlier session is NOT a reason to skip the question: offer it as
+the default, but still ask — otherwise today's work books onto yesterday's workitem.
 ${MARKER}"
 
 # ── 1. Local setup ────────────────────────────────────────────────────────────
