@@ -16,6 +16,14 @@
         "clientId": "bc365",
         "authServerMetadataUrl": "https://oscar.msu-solutions.de/bc-explorer/.well-known/oauth-authorization-server"
       }
+    },
+    "ms365": {
+      "type": "http",
+      "url": "https://ms365.os.kraftwerk.io/mcp",
+      "oauth": {
+        "clientId": "mcp_kos",
+        "authServerMetadataUrl": "https://ms365.os.kraftwerk.io/.well-known/oauth-authorization-server"
+      }
     }
   }
 }
