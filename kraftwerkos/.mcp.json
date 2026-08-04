@@ -22,7 +22,8 @@
       "url": "https://ms365.os.kraftwerk.io/mcp",
       "oauth": {
         "clientId": "mcp_kos",
-        "authServerMetadataUrl": "https://ms365.os.kraftwerk.io/.well-known/oauth-authorization-server"
+        "authServerMetadataUrl": "https://ms365.os.kraftwerk.io/.well-known/oauth-authorization-server",
+        "scopes": "Mail.ReadWrite Mail.Send Mail.Read.Shared Mail.Send.Shared User.Read.All MailboxSettings.Read MailboxSettings.ReadWrite Calendars.ReadWrite Calendars.Read.Shared Files.ReadWrite Notes.Read Notes.Create Notes.ReadWrite Tasks.ReadWrite Contacts.ReadWrite User.Read People.Read Chat.Read ChatMember.Read ChatMessage.Read ChatMessage.Send Team.ReadBasic.All Channel.ReadBasic.All Channel.Create ChannelSettings.ReadWrite.All Channel.Delete.All ChannelMessage.Read.All ChannelMessage.Send TeamMember.ReadWrite.All TeamsTab.Read.All TeamMember.Read.All Chat.ReadWrite Sites.Read.All Sites.ReadWrite.All Files.Read.All OnlineMeetings.Read OnlineMeetings.ReadWrite Group.Read.All Group.ReadWrite.All Presence.Read Presence.Read.All VirtualEvent.Read"
       }
     }
   }
