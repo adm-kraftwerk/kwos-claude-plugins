@@ -4,6 +4,12 @@
 # Two tasks:
 #   1. Local setup — CLAUDE.md injection + sh hook scripts to ~/.kwos/
 #   2. Server call — POST session-start body; output response (session ID + workitem carry)
+#
+# WARUM die Anweisung in ~/.claude/CLAUDE.md INJIZIERT wird und nicht als Plugin-Datei mitkommt:
+# ein CLAUDE.md im Plugin-Root wird laut Claude-Code-Doku NICHT als Kontext geladen ("Plugins
+# contribute context through skills, agents, and hooks rather than CLAUDE.md"). Die Injektion ist
+# also der einzige Weg, eine dauerhaft wirksame Anweisung auszuliefern -- sie darf NICHT durch eine
+# Plugin-eigene CLAUDE.md ersetzt werden (2026-08-05 geprueft, Annahme vorher falsch).
 
 BODY=$(cat)  # drain stdin before any early exit; forwarded to server
 
@@ -12,11 +18,11 @@ CLAUDE_MD="$HOME/.claude/CLAUDE.md"
 KWOS_DIR="$HOME/.kwos"
 SCRIPT_DIR="$(dirname "$0")"
 
+# Phrase, die JEDE Fassung der Anweisung enthaelt -- Zaehler dafuer, ob genau EINE Kopie existiert.
+QUESTION='Which kw/OS workitem are you working on'
+
 # SENTINEL = Fingerabdruck der AKTUELLEN Instruktion. Aendert sich der Text unten, MUSS dieser
-# Wert mit erhoeht werden -- sonst erreicht die Aenderung bestehende Nutzer NIE: der Block wird
-# nur neu geschrieben, wenn er fehlt oder der Fingerabdruck nicht passt. (Vorher wurde
-# ausschliesslich die Marker-ANZAHL geprueft -> eine Textaenderung war ein stiller No-Op fuer
-# jeden, der den Block schon hatte.)
+# Wert mit erhoeht werden -- sonst erreicht die Aenderung bestehende Nutzer NIE.
 SENTINEL='kw/OS Workitem Tracking (v3)'
 
 # Die Instruktion ist BEDINGT, aber NUR an KWOS_WORKITEM: in kwclaude-Sessions steht das Workitem
@@ -26,14 +32,13 @@ SENTINEL='kw/OS Workitem Tracking (v3)'
 # dort weggefallen und die Arbeit still auf ein Workitem von gestern gebucht. DASSELBE PLUGIN
 # laeuft in beiden Welten (eine Marketplace-Quelle), also trifft jede Textaenderung auch plain
 # claude. Der Block liegt in einer DAUERHAFTEN Datei, die beide Welten lesen; deshalb wird die
-# Bedingung im TEXT formuliert und nicht beim Schreiben ausgewertet (sonst wuerde der in einer
-# kwclaude-Session geschriebene Stand in plain-claude-Sessions weitergelten und umgekehrt).
+# Bedingung im TEXT formuliert und nicht beim Schreiben ausgewertet.
 INSTRUCTION="${MARKER}
 ## ${SENTINEL}
 Skip the question ONLY when the environment variable KWOS_WORKITEM is set (session started via
 \`kwclaude\`: the launcher binds the workitem for this session and the gateway enforces it
 server-side, so an answer could not change the booking).
-Otherwise (plain \`claude\`, no gateway) ask once \"Which kw/OS workitem are you working on?\", then
+Otherwise (plain \`claude\`, no gateway) ask once \"${QUESTION}?\", then
 use ToolSearch with query \"setSessionWorkitem\" to load the MCP tool schema and call it with their
 workitemId and the session ID from your context. Never use Bash or shell scripts to set the
 workitem — it is always a deferred MCP tool. Only ask once per session.
@@ -45,18 +50,33 @@ ${MARKER}"
 
 MARKER_COUNT=$(grep -cF "$MARKER" "$CLAUDE_MD" 2>/dev/null || printf '0')
 HAS_SENTINEL=$(grep -cF "$SENTINEL" "$CLAUDE_MD" 2>/dev/null || printf '0')
+# Genau EINE Kopie der Anweisung ist der Sollzustand. Mehr heisst: es liegen ALT-KOPIEN ausserhalb
+# der Marker herum (aus der Zeit vor den Markern). Die widersprechen dem aktuellen Block -- die
+# alte Fassung ist kategorisch formuliert und gewinnt, dadurch fragte kwclaude weiter nach dem
+# Workitem, obwohl der neue Block das ausschliesst (gemeldet 2026-08-05 von einem WSL-Client).
+QUESTION_COUNT=$(grep -cF "$QUESTION" "$CLAUDE_MD" 2>/dev/null || printf '0')
+
 if ! ([ "$MARKER_COUNT" -eq 2 ] && \
       [ "$HAS_SENTINEL" -ge 1 ] && \
+      [ "$QUESTION_COUNT" -eq 1 ] && \
       [ -f "$KWOS_DIR/langfuse-hook.sh"     ] && \
       [ -f "$KWOS_DIR/inject-session-id.sh" ]); then
 
     mkdir -p "$(dirname "$CLAUDE_MD")" 2>/dev/null
     if [ -f "$CLAUDE_MD" ]; then
         ORIGINAL=$(cat "$CLAUDE_MD")
-        # awk uses exact string comparison ($0 == m), not regex — safe for all marker content.
-        CLEANED=$(printf '%s\n' "$ORIGINAL" | awk -v m="$MARKER" '
+        # Entfernt (a) den Marker-Block und (b) Alt-Kopien AUSSERHALB der Marker samt der
+        # unmittelbar davor stehenden Ueberschrift. Fuer (b) wird eine Ueberschrift
+        # zurueckgehalten und nur ausgegeben, wenn NICHT die Anweisungszeile folgt.
+        # awk vergleicht den Marker exakt ($0 == m), nicht als Regex — safe fuer jeden Inhalt.
+        CLEANED=$(printf '%s\n' "$ORIGINAL" | awk -v m="$MARKER" -v q="$QUESTION" '
+            function flush() { if (held != "") { print held; held = "" } }
             $0 == m { in_block = !in_block; next }
-            !in_block { print }
+            in_block { next }
+            index($0, q) > 0 { held = ""; next }
+            /^#+[ \t]*kw\/OS Workitem Tracking/ { flush(); held = $0; next }
+            { flush(); print }
+            END { flush() }
         ')
         printf '%s\n\n%s\n' "$CLEANED" "$INSTRUCTION" > "$CLAUDE_MD" 2>/dev/null
     else
@@ -66,6 +86,7 @@ if ! ([ "$MARKER_COUNT" -eq 2 ] && \
     mkdir -p "$KWOS_DIR"
     cp -f "$SCRIPT_DIR/langfuse-hook.sh"     "$KWOS_DIR/" 2>/dev/null
     cp -f "$SCRIPT_DIR/inject-session-id.sh" "$KWOS_DIR/" 2>/dev/null
+    chmod +x "$KWOS_DIR/langfuse-hook.sh" "$KWOS_DIR/inject-session-id.sh" 2>/dev/null
 fi
 
 # ── 2. Server call (session registration + carry lookup) ─────────────────────
