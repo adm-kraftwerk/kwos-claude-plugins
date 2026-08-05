@@ -23,7 +23,7 @@ QUESTION='Which kw/OS workitem are you working on'
 
 # SENTINEL = Fingerabdruck der AKTUELLEN Instruktion. Aendert sich der Text unten, MUSS dieser
 # Wert mit erhoeht werden -- sonst erreicht die Aenderung bestehende Nutzer NIE.
-SENTINEL='kw/OS Workitem Tracking (v4)'
+SENTINEL='kw/OS Workitem Tracking (v5)'
 
 # Die Instruktion ist BEDINGT an einer im KONTEXT SICHTBAREN Zeile ("WORKITEM BOUND:"), die dieser
 # Hook unten ausgibt, wenn KWOS_WORKITEM gesetzt ist. Frueher lautete die Bedingung "wenn die
@@ -40,8 +40,14 @@ INSTRUCTION="${MARKER}
 ## ${SENTINEL}
 If the [kraftwerkOS] block in your context contains a line starting with \"WORKITEM BOUND:\", the
 workitem for this session is already fixed (started via \`kwclaude\`; the gateway enforces it
-server-side). In that case do NOT ask: silently call setSessionWorkitem with the ID from that line
-and the session ID from your context, then continue with the user's request.
+server-side and books the cost). Then, in order:
+  1. Do NOT ask the user anything about the workitem.
+  2. If an \"OTEL token-tracking session ID\" is ALSO present in your context, silently call
+     setSessionWorkitem with the bound ID and that session ID.
+  3. If that session ID is NOT present, do nothing further and say nothing about it. Cost
+     attribution already happens server-side; the tracking link is optional.
+NEVER search for a session ID: no Bash, no grep, no find, no reading of session or log files, no
+directory listings. If it is not in your context, it does not exist for you.
 Otherwise (plain \`claude\`, no gateway) ask once \"${QUESTION}?\", then
 use ToolSearch with query \"setSessionWorkitem\" to load the MCP tool schema and call it with their
 workitemId and the session ID from your context. Never use Bash or shell scripts to set the
@@ -95,6 +101,14 @@ fi
 
 # ── 2. Server call (session registration + carry lookup) ─────────────────────
 
+# GRENZE, hier wichtig: dieser Call braucht KWOS_HOOKS_SECRET, und das kommt aus den
+# server-managed remote-settings. Die werden bei gesetztem ANTHROPIC_BASE_URL NICHT ausgeliefert
+# (2026-08-05 gemessen: in kwclaude-Sessions sind KWOS_HOOKS_SECRET/ENABLE_LSP_TOOL/
+# CLAUDE_CODE_SUBAGENT_MODEL leer, in plain claude gesetzt). In kwclaude-Sessions schlaegt die
+# Registrierung deshalb STILL fehl (curl -sf) -> es gibt keine OTEL-Session-ID und keinen Carry.
+# Genau darum darf die Instruktion oben die Session-ID nicht voraussetzen: ein Agent, der sie
+# sucht, greppt sonst minutenlang durch das Dateisystem (gemeldet 2026-08-05).
+# Kostenattribution ist davon NICHT betroffen -- die macht der Gateway serverseitig.
 PLUGIN_URL="${KWOS_PLUGIN_URL%/}"
 if [ -n "$PLUGIN_URL" ]; then
     RESPONSE=$(printf '%s' "$BODY" | curl -sf -X POST "${PLUGIN_URL}/hooks/session-start" \
