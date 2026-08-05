@@ -23,10 +23,13 @@ QUESTION='Which kw/OS workitem are you working on'
 
 # SENTINEL = Fingerabdruck der AKTUELLEN Instruktion. Aendert sich der Text unten, MUSS dieser
 # Wert mit erhoeht werden -- sonst erreicht die Aenderung bestehende Nutzer NIE.
-SENTINEL='kw/OS Workitem Tracking (v3)'
+SENTINEL='kw/OS Workitem Tracking (v4)'
 
-# Die Instruktion ist BEDINGT, aber NUR an KWOS_WORKITEM: in kwclaude-Sessions steht das Workitem
-# beim Start fest (Launcher setzt es, Gateway erzwingt es mit 403) -- eine Rueckfrage ist sinnlos.
+# Die Instruktion ist BEDINGT an einer im KONTEXT SICHTBAREN Zeile ("WORKITEM BOUND:"), die dieser
+# Hook unten ausgibt, wenn KWOS_WORKITEM gesetzt ist. Frueher lautete die Bedingung "wenn die
+# Umgebungsvariable KWOS_WORKITEM gesetzt ist" -- die kann der Agent aber NICHT pruefen (keine
+# Env-Sicht, und Shell-Aufrufe sind fuer das Workitem ausdruecklich verboten). Folge war eine
+# Rueckfrage, OB die Session ueber kwclaude laeuft: schlimmer als vorher.
 # BEWUSST NICHT als Abbruchbedingung: ein per Carry uebernommenes Workitem. Das trifft in plain
 # claude regelmaessig zu (der Server liefert den Carry frueherer Sessions mit) -> die Frage waere
 # dort weggefallen und die Arbeit still auf ein Workitem von gestern gebucht. DASSELBE PLUGIN
@@ -35,9 +38,10 @@ SENTINEL='kw/OS Workitem Tracking (v3)'
 # Bedingung im TEXT formuliert und nicht beim Schreiben ausgewertet.
 INSTRUCTION="${MARKER}
 ## ${SENTINEL}
-Skip the question ONLY when the environment variable KWOS_WORKITEM is set (session started via
-\`kwclaude\`: the launcher binds the workitem for this session and the gateway enforces it
-server-side, so an answer could not change the booking).
+If the [kraftwerkOS] block in your context contains a line starting with \"WORKITEM BOUND:\", the
+workitem for this session is already fixed (started via \`kwclaude\`; the gateway enforces it
+server-side). In that case do NOT ask: silently call setSessionWorkitem with the ID from that line
+and the session ID from your context, then continue with the user's request.
 Otherwise (plain \`claude\`, no gateway) ask once \"${QUESTION}?\", then
 use ToolSearch with query \"setSessionWorkitem\" to load the MCP tool schema and call it with their
 workitemId and the session ID from your context. Never use Bash or shell scripts to set the
@@ -98,5 +102,14 @@ if [ -n "$PLUGIN_URL" ]; then
         -H "X-Hook-Secret: ${KWOS_HOOKS_SECRET}" \
         --data @- 2>/dev/null)
     [ -n "$RESPONSE" ] && printf '%s' "$RESPONSE"
+fi
+
+# Die Bedingung SICHTBAR machen: der Agent kann Umgebungsvariablen nicht lesen, und ihn dafuer
+# eine Shell aufrufen zu lassen ist verboten (Workitem = immer deferred MCP-Tool). Gemeldet
+# 2026-08-05: mit der Bedingung "wenn KWOS_WORKITEM gesetzt ist" fragte der Agent stattdessen
+# zurueck, OB die Session ueber kwclaude laeuft -- schlimmer als die alte Rueckfrage.
+# Der Hook kennt die Variable und schreibt sie deshalb in den Kontext.
+if [ -n "${KWOS_WORKITEM:-}" ]; then
+    printf '%s\n' "" "[kraftwerkOS] WORKITEM BOUND: $KWOS_WORKITEM"
 fi
 exit 0
