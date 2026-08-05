@@ -7,7 +7,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/session-start.sh",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}\"/scripts/session-start.sh",
             "timeout": 10
           }
         ]
@@ -20,7 +20,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/session-end.sh",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}\"/scripts/session-end.sh",
             "timeout": 10
           }
         ]
