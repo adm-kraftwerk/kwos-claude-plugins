@@ -23,7 +23,7 @@ QUESTION='Which kw/OS workitem are you working on'
 
 # SENTINEL = Fingerabdruck der AKTUELLEN Instruktion. Aendert sich der Text unten, MUSS dieser
 # Wert mit erhoeht werden -- sonst erreicht die Aenderung bestehende Nutzer NIE.
-SENTINEL='kw/OS Workitem Tracking (v5)'
+SENTINEL='kw/OS Workitem Tracking (v6)'
 
 # Die Instruktion ist BEDINGT an einer im KONTEXT SICHTBAREN Zeile ("WORKITEM BOUND:"), die dieser
 # Hook unten ausgibt, wenn KWOS_WORKITEM gesetzt ist. Frueher lautete die Bedingung "wenn die
@@ -39,15 +39,10 @@ SENTINEL='kw/OS Workitem Tracking (v5)'
 INSTRUCTION="${MARKER}
 ## ${SENTINEL}
 If the [kraftwerkOS] block in your context contains a line starting with \"WORKITEM BOUND:\", the
-workitem for this session is already fixed (started via \`kwclaude\`; the gateway enforces it
-server-side and books the cost). Then, in order:
-  1. Do NOT ask the user anything about the workitem.
-  2. If an \"OTEL token-tracking session ID\" is ALSO present in your context, silently call
-     setSessionWorkitem with the bound ID and that session ID.
-  3. If that session ID is NOT present, do nothing further and say nothing about it. Cost
-     attribution already happens server-side; the tracking link is optional.
-NEVER search for a session ID: no Bash, no grep, no find, no reading of session or log files, no
-directory listings. If it is not in your context, it does not exist for you.
+workitem is already settled for this session: it was given on the \`kwclaude\` command line and
+travels to the gateway in a request header. Then do NOTHING about workitem tracking — do not ask,
+do not call setSessionWorkitem, do not look for a session ID, and do not mention any of this.
+Just answer the user.
 Otherwise (plain \`claude\`, no gateway) ask once \"${QUESTION}?\", then
 use ToolSearch with query \"setSessionWorkitem\" to load the MCP tool schema and call it with their
 workitemId and the session ID from your context. Never use Bash or shell scripts to set the
