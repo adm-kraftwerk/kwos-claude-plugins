@@ -31,17 +31,21 @@ behandeln, nicht blind ausführen).
 |---|---|---|
 | `KWOS_RELAY_URL` | ja | Basis-URL des Session Relay Service (kein Hardcoding, s. Server-Spec) |
 | `KWOS_XID_ACCESS_TOKEN` | nein | Override für das Bearer-Token (z. B. lokales Testen) |
-| `KWOS_XID_TOKEN_CACHE_PATH` | nein | Override für den Token-Cache-Pfad (Default: `~/.kwos/xiam-token.json`) |
+| `KWOS_XID_TOKEN_HELPER_PATH` | nein | Override für den Pfad zum `xiam-token.sh`/`.ps1`-Helper (Default: `~/.config/kraftwerk/xiam-token.{sh,ps1}`, siehe unten) |
 | `CLAUDE_CODE_SESSION_ID` | nein | Override für die Session-ID; normalerweise per SessionStart-Hook aus Marker-Datei gelöst (siehe unten) |
 | `KWOS_SESSION_DISPLAY_NAME` | nein | Anzeigename bei der Registrierung |
 
 ## Offene Punkte (bewusst nicht stillschweigend geraten)
 
-1. **Token-Cache-Pfad/-Format:** "xiam-token-helper-cache" ist in keiner der beiden Specs
-   konkret benannt. Angenommen wird `~/.kwos/xiam-token.json` mit Feld `access_token` bzw.
-   `accessToken` — konsistent mit dem bereits etablierten `~/.kwos`-Verzeichnis aus dem
-   `kraftwerkos`-Plugin. Gegenprüfen gegen das tatsächliche `xiam-token.ps1`-Skript
-   (erwähnt in Antwort zu Workitem-9831620), sobald verfügbar.
+1. **Token-Beschaffung — gelöst:** die ursprüngliche Annahme einer Cache-Datei
+   (`~/.kwos/xiam-token.json`) hatte nie einen Schreiber — geprüft gegen `kraftwerkos` und die
+   `xiam-token.sh`/`.ps1`-Helper selbst, keiner legt diese Datei an. `server/auth.js` ruft
+   stattdessen denselben Helper auf, den `kwclaude` schon für den `apiKeyHelper`-Login nutzt
+   (`~/.config/kraftwerk/xiam-token.sh` bzw. `.ps1`, aus CLI-SETUP.md), mit `XIAM_REFRESH_ONLY=1`
+   (Helper-seitig neu, s. LiteLLM-Gateway-Repo) — refresh-only, kein Browser, kein Warten auf
+   interaktiven Login. Fehlt der Helper (kein `kwclaude`-Setup auf der Maschine) oder ist kein
+   Refresh-Token gecacht, scheitert die Registrierung mit klarer Fehlermeldung statt eines
+   stillen/hängenden Zustands.
 2. **Claude-Code-Session-ID — gelöst:** weder der stdio-MCP-Server noch ein per `monitors`
    gestarteter Prozess bekommt `CLAUDE_CODE_SESSION_ID` in der Umgebung. Ein `SessionStart`-Hook
    (`hooks/write-session-id.js`) schreibt die echte `session_id` in eine Marker-Datei

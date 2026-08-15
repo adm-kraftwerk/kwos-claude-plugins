@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, platform } from "node:os";
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { log } from "./log.js";
@@ -12,12 +12,15 @@ if (!RELAY_URL) {
 }
 
 // Auth: der Relay validiert das XID-Access-Token selbst via /oidc/me (siehe
-// Abweichungs-Kommentar an Workitem-9831619) — kein separates OBO-Handling nötig.
-// Pfad zum Token-Cache ist nicht spezifiziert ("xiam-token-helper-cache"); wir nehmen
-// das bereits etablierte ~/.kwos-Verzeichnis an (siehe kraftwerkos-Plugin) und legen
-// den Dateinamen so lange fest, bis das gegengeprüft ist.
-const DEFAULT_TOKEN_CACHE_PATH = join(homedir(), ".kwos", "xiam-token.json");
-const TOKEN_CACHE_PATH = process.env.KWOS_XID_TOKEN_CACHE_PATH || DEFAULT_TOKEN_CACHE_PATH;
+// Abweichungs-Kommentar an Workitem-9831619). Frueher wurde eine Cache-Datei
+// (~/.kwos/xiam-token.json) angenommen, die niemand je geschrieben hat -- s. auth.js:
+// der Helper (xiam-token.sh/.ps1, derselbe wie bei kwclaude) wird jetzt selbst aufgerufen,
+// vom bereits etablierten Installationspfad aus CLI-SETUP.md.
+const DEFAULT_TOKEN_HELPER_PATH = join(
+  homedir(), ".config", "kraftwerk",
+  platform() === "win32" ? "xiam-token.ps1" : "xiam-token.sh"
+);
+const TOKEN_HELPER_PATH = process.env.KWOS_XID_TOKEN_HELPER_PATH || DEFAULT_TOKEN_HELPER_PATH;
 const TOKEN_OVERRIDE = process.env.KWOS_XID_ACCESS_TOKEN;
 
 // Claude-Code-Session-ID: weder der stdio-MCP-Server noch ein per `monitors` gestarteter
@@ -67,7 +70,7 @@ async function resolveSessionId() {
 
 export const config = {
   relayUrl: RELAY_URL ? RELAY_URL.replace(/\/$/, "") : undefined,
-  tokenCachePath: TOKEN_CACHE_PATH,
+  tokenHelperPath: TOKEN_HELPER_PATH,
   tokenOverride: TOKEN_OVERRIDE,
   sessionId: undefined,
   displayName: process.env.KWOS_SESSION_DISPLAY_NAME || undefined,
