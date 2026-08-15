@@ -11,7 +11,7 @@
 // liefert die Notification, was Claude damit macht, entscheidet die jeweilige Session selbst
 // (Reaction Policy §2.3: wie User-Input behandeln, nicht blind ausführen).
 
-import { config } from "./config.js";
+import { config, ensureSessionId } from "./config.js";
 import { log } from "./log.js";
 import * as relay from "./relay-client.js";
 import { runSseReceiver } from "./sse-receiver.js";
@@ -36,6 +36,7 @@ async function main() {
   // Eigenständig registrieren statt sich auf die Startreihenfolge des MCP-Servers zu
   // verlassen (register ist idempotent) — vermeidet eine Race zwischen den beiden
   // unabhängig gestarteten Prozessen (MCP-Server per stdio, dieser Monitor per `monitors`).
+  await ensureSessionId();
   try {
     await relay.register();
   } catch (err) {

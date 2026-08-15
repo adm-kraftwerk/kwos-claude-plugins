@@ -32,7 +32,7 @@ behandeln, nicht blind ausführen).
 | `KWOS_RELAY_URL` | ja | Basis-URL des Session Relay Service (kein Hardcoding, s. Server-Spec) |
 | `KWOS_XID_ACCESS_TOKEN` | nein | Override für das Bearer-Token (z. B. lokales Testen) |
 | `KWOS_XID_TOKEN_CACHE_PATH` | nein | Override für den Token-Cache-Pfad (Default: `~/.kwos/xiam-token.json`) |
-| `CLAUDE_CODE_SESSION_ID` | nein | Session-ID für Relay-Attribution; ohne diese wird eine lokale UUID generiert (siehe unten) |
+| `CLAUDE_CODE_SESSION_ID` | nein | Override für die Session-ID; normalerweise per SessionStart-Hook aus Marker-Datei gelöst (siehe unten) |
 | `KWOS_SESSION_DISPLAY_NAME` | nein | Anzeigename bei der Registrierung |
 
 ## Offene Punkte (bewusst nicht stillschweigend geraten)
@@ -42,13 +42,13 @@ behandeln, nicht blind ausführen).
    `accessToken` — konsistent mit dem bereits etablierten `~/.kwos`-Verzeichnis aus dem
    `kraftwerkos`-Plugin. Gegenprüfen gegen das tatsächliche `xiam-token.ps1`-Skript
    (erwähnt in Antwort zu Workitem-9831620), sobald verfügbar.
-2. **Claude-Code-Session-ID:** Kein bekannter Mechanismus, wie ein per stdio gestarteter
-   MCP-Server *oder* ein per `monitors` gestarteter Prozess an `x-claude-code-session-id`
-   herankommt (gilt für beide Prozesse gleichermaßen). Aktuell: `CLAUDE_CODE_SESSION_ID`
-   aus der Umgebung, sonst lokal generierte UUID (mit lautem Log-Warning) — dadurch
-   passt die Relay-/Gateway-/OTLP-Attribution nicht zusammen, bis das geklärt ist. Diskutiert:
-   ggf. löst der Gateway/Relay das serverseitig sauberer (Session-ID beim Node-Start
-   injizieren), statt dass der Client rät — siehe Kommentar an Workitem-9831619.
+2. **Claude-Code-Session-ID — gelöst:** weder der stdio-MCP-Server noch ein per `monitors`
+   gestarteter Prozess bekommt `CLAUDE_CODE_SESSION_ID` in der Umgebung. Ein `SessionStart`-Hook
+   (`hooks/write-session-id.js`) schreibt die echte `session_id` in eine Marker-Datei
+   `.kwos-session-bus-id` im Projektverzeichnis; `server/config.js` sucht sie beim Start
+   aufwärts durchs Verzeichnis, mit kurzem Polling (Hook und Prozess starten unabhängig
+   voneinander). `CLAUDE_CODE_SESSION_ID` aus der Umgebung bleibt als Override erhalten,
+   lokal generierte UUID nur noch als letzter Fallback (mit lautem Log-Warning).
 3. **`monitors`-Verfügbarkeit/Trust-Level:** Background-Monitore laufen laut Doku nur in
    interaktiven CLI-Sessions, unsandboxed auf demselben Trust-Level wie Hooks, und werden auf
    Hosts ohne Monitor-Tool-Unterstützung übersprungen (dann bleibt nur `list_sessions`/

@@ -1,7 +1,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { config } from "./config.js";
+import { config, ensureSessionId } from "./config.js";
 import { log } from "./log.js";
 import * as relay from "./relay-client.js";
 
@@ -82,6 +82,7 @@ async function main() {
     return;
   }
 
+  await ensureSessionId();
   try {
     await relay.register();
     log.info("Bei Session Relay registriert.", { sessionId: config.sessionId });
