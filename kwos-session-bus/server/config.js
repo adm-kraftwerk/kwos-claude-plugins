@@ -4,12 +4,18 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { log } from "./log.js";
 
-// Basis-URL des Session Relay Service (Workitem-9831619). Bewusst kein
-// Hardcoding — Vorgabe aus der Server-Spec ("URL aus Gateway-Konfiguration").
-const RELAY_URL = process.env.KWOS_RELAY_URL;
-if (!RELAY_URL) {
-  log.error("KWOS_RELAY_URL ist nicht gesetzt — der Session Bus kann sich nicht registrieren.");
-}
+// Basis-URL des Session Relay Service (Workitem-9831619). War als reines Env-Override gedacht
+// ("URL aus Gateway-Konfiguration") -- fiel aber in der Praxis auf einen `monitors`-Prozess NIE
+// durch: Claude Code injiziert settings.json-`env` dokumentiert nur in Bash/PowerShell-Tools,
+// tmux, Hooks, die Statusline und stdio-MCP-Server -- `monitors` steht NICHT auf dieser Liste
+// (per Prozessbaum bestaetigt: der Monitor laeuft ueber dieselbe Shell-Snapshot/Bash-Mechanik wie
+// das Bash-Tool, nicht als direkter Kindprozess von Claude Code). Ergebnis: der Monitor sah
+// KWOS_RELAY_URL nie, jede Registrierung/Heartbeat scheiterte fortlaufend still (Fehler nur auf
+// stderr, das fuer `monitors` nirgends sichtbar landet). Es gibt in diesem Deployment ohnehin nur
+// einen Relay -- Default fest verdrahtet (kein Geheimnis, steht bereits ueberall in Doku/Wiki),
+// Override bleibt fuer Tests/andere Deployments moeglich.
+const DEFAULT_RELAY_URL = "https://llm.os.kraftwerk.io";
+const RELAY_URL = process.env.KWOS_RELAY_URL || DEFAULT_RELAY_URL;
 
 // Auth: der Relay validiert das XID-Access-Token selbst via /oidc/me (siehe
 // Abweichungs-Kommentar an Workitem-9831619). Frueher wurde eine Cache-Datei
@@ -48,6 +54,19 @@ function findSessionIdFile(startDir) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Gleiches Problem wie bei RELAY_URL: KWOS_SESSION_DISPLAY_NAME erreicht den `monitors`-Prozess
+// nie (kein Env-Overlay dort, s. oben), und der Relay lehnt eine Registrierung ganz ohne
+// display_name mit 400 ab -- REGISTRIERUNG WAERE ALSO SELBST MIT KORREKTEM RELAY_URL NIE
+// DURCHGEKOMMEN. cwd() ist dagegen die echte Prozess-Arbeitsverzeichnis-Angabe (kein Env), steht
+// also auch dem Monitor zuverlaessig zur Verfuegung. Gleiche Namenskonvention wie die
+// serverseitige deriveDisplayName() in relay/lib.js (Basename des Arbeitsverzeichnisses).
+function deriveDisplayName(cwd) {
+  if (typeof cwd !== "string" || !cwd.trim()) return "Claude Code Session";
+  const norm = cwd.replace(/[\\/]+$/, "");
+  const base = norm.split(/[\\/]/).pop();
+  return base && base.trim() ? base : "Claude Code Session";
+}
+
 // Hook und dieser Prozess starten unabhaengig voneinander (SessionStart-Hook vs. `monitors`/
 // stdio-MCP) -- kurzes Polling statt eines einmaligen Checks, damit die Reihenfolge egal ist.
 async function resolveSessionId() {
@@ -73,7 +92,7 @@ export const config = {
   tokenHelperPath: TOKEN_HELPER_PATH,
   tokenOverride: TOKEN_OVERRIDE,
   sessionId: undefined,
-  displayName: process.env.KWOS_SESSION_DISPLAY_NAME || undefined,
+  displayName: process.env.KWOS_SESSION_DISPLAY_NAME || deriveDisplayName(process.cwd()),
   heartbeatIntervalMs: 5 * 60 * 1000, // Vorschlag Server-Spec §3.1: alle 5 Min
   ttlMinutes: 30,
 };

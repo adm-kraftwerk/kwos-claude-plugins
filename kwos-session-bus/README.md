@@ -29,11 +29,11 @@ behandeln, nicht blind ausführen).
 
 | Variable | Pflicht | Zweck |
 |---|---|---|
-| `KWOS_RELAY_URL` | ja | Basis-URL des Session Relay Service (kein Hardcoding, s. Server-Spec) |
+| `KWOS_RELAY_URL` | nein | Override für die Relay-URL (Default: `https://llm.os.kraftwerk.io` — s. unten, warum ein Default und kein Pflichtfeld) |
 | `KWOS_XID_ACCESS_TOKEN` | nein | Override für das Bearer-Token (z. B. lokales Testen) |
 | `KWOS_XID_TOKEN_HELPER_PATH` | nein | Override für den Pfad zum `xiam-token.sh`/`.ps1`-Helper (Default: `~/.config/kraftwerk/xiam-token.{sh,ps1}`, siehe unten) |
 | `CLAUDE_CODE_SESSION_ID` | nein | Override für die Session-ID; normalerweise per SessionStart-Hook aus Marker-Datei gelöst (siehe unten) |
-| `KWOS_SESSION_DISPLAY_NAME` | nein | Anzeigename bei der Registrierung |
+| `KWOS_SESSION_DISPLAY_NAME` | nein | Override für den Anzeigenamen (Default: Basename des Arbeitsverzeichnisses, siehe unten) |
 
 ## Offene Punkte (bewusst nicht stillschweigend geraten)
 
@@ -59,7 +59,20 @@ behandeln, nicht blind ausführen).
    `send_message`/`broadcast` manuell nutzbar, kein Empfang). Nicht verifiziert: exaktes
    Verhalten von zwei unabhängig gestarteten Prozessen (MCP-Server + Monitor), die beide
    `register` aufrufen — als idempotent angenommen (Server-Spec sagt nichts Gegenteiliges).
-4. **Shared-Types:** Server (9831619) und Client sind beide Node — ein geteiltes
+4. **`monitors` bekommen KEIN settings.json-`env` — gelöst, mit realem Produktionsausfall
+   gefunden (2026-08-15):** Claude Codes Doku listet, welche Kindprozesse den `env`-Block aus
+   settings.json injiziert bekommen — Bash-/PowerShell-Tool, tmux, Hooks, Statusline,
+   stdio-MCP-Server. **`monitors` steht NICHT auf dieser Liste.** Per Prozessbaum bestätigt: der
+   Monitor läuft über dieselbe Shell-Snapshot/Bash-Mechanik wie das Bash-Tool (Snapshot der
+   Shell VOR jeder Claude-Code-eigenen `env`-Überlagerung), nicht als direkter Kindprozess.
+   Folge: `KWOS_RELAY_URL` UND `KWOS_SESSION_DISPLAY_NAME` kamen im Monitor nie an — die
+   Registrierung scheiterte fortlaufend still (Fehler nur auf `stderr`, das für `monitors`
+   nirgends sichtbar landet: kein Fehler in der PWA, keine Meldung irgendwo, Monitor lief
+   trotzdem sichtbar in der Fusszeile). In diesem Deployment gibt es ohnehin nur einen Relay und
+   der Anzeigename ist reine Kosmetik — beide jetzt mit robustem, envfreiem Default (feste
+   Relay-URL bzw. Basename des Arbeitsverzeichnisses wie serverseitig `deriveDisplayName()` in
+   `relay/lib.js`). Env-Override bleibt für Tests/andere Deployments.
+5. **Shared-Types:** Server (9831619) und Client sind beide Node — ein geteiltes
    TS-Typen-Paket für den §4-Vertrag wäre der saubere v1-Schritt, existiert noch nicht.
 
 ## Setup
