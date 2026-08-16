@@ -84,10 +84,34 @@ behandeln, nicht blind ausführen).
 5. **Shared-Types:** Server (9831619) und Client sind beide Node — ein geteiltes
    TS-Typen-Paket für den §4-Vertrag wäre der saubere v1-Schritt, existiert noch nicht.
 
-## Setup
+## Setup (nur für lokale Entwicklung)
 
 ```
 npm install
 ```
 
-`.mcp.json` startet den Server über `node ${CLAUDE_PLUGIN_ROOT}/server/index.js`.
+## Build -- PFLICHT vor jedem Commit, der server/index.js oder eine seiner Abhängigkeiten ändert
+
+**Gefunden als realer Produktionsausfall (2026-08-16):** dieses Plugin wird über einen
+`git-subdir`-Marketplace verteilt — Claude Code klont/kopiert nur die Dateien, es gibt **keinen**
+`npm install`-Schritt beim Endnutzer. `server/index.js` importiert aber `@modelcontextprotocol/sdk`
+aus `node_modules`, das in einer echten Fleet-Installation **nie existiert** → der MCP-Server
+crashte beim Start mit `ERR_MODULE_NOT_FOUND`, sichtbar als `/mcp` → `✘ failed`, Reconnect ändert
+daran nichts. Der `monitors`-Prozess (`server/listen.js`) hat KEINE externe Abhängigkeit und lief
+deshalb immer — das verschleierte den Ausfall: die Session zeigte aktiv Notifications, obwohl kein
+einziges MCP-Tool (`list_sessions`, `send_message`, `broadcast`, `notify_dependents`, `ask_remote`)
+je erreichbar war.
+
+**Fix:** `server/index.js` wird zu einer einzigen, in sich geschlossenen Datei gebündelt
+(`server/index.bundle.mjs`, alle Abhängigkeiten inklusive SDK inline) — das ist die Datei, die
+`.mcp.json` tatsächlich startet. `server/listen.js` braucht KEIN Bundling (keine externe
+Abhängigkeit, s. o.).
+
+```
+npm run build
+```
+
+**Nach jeder Änderung an `server/index.js` (oder `config.js`/`auth.js`/`relay-client.js`/`log.js`,
+die es importiert) `npm run build` ausführen und `server/index.bundle.mjs` mitcommitten** — sonst
+läuft der alte Stand in Produktion weiter. Real gegengeprüft: echter MCP-JSON-RPC-Handshake
+(`initialize` + `tools/list`) gegen die gebündelte Datei liefert alle fünf Tools korrekt.

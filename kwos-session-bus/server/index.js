@@ -89,7 +89,7 @@ const TOOLS = [
 ];
 
 const server = new Server(
-  { name: "kwos-session-bus", version: "0.3.0" },
+  { name: "kwos-session-bus", version: "0.3.1" },
   { capabilities: { tools: {} } }
 );
 

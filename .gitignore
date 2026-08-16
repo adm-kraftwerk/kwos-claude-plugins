@@ -1,3 +1,4 @@
 .claude/settings.local.json
 /CLAUDE.md
 /managed-settings.json
+node_modules/
