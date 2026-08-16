@@ -38,6 +38,54 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "notify_dependents",
+    description:
+      "Benachrichtigt ALLE Sessions (auch fremder Nutzer/Teams), die einen bestimmten Channel " +
+      "abonniert haben, über eine Änderung, die sie betreffen könnte -- z. B. eine geänderte " +
+      "Schnittstelle/einen geänderten Contract zwischen zwei Services. Ein Channel entspricht " +
+      "typischerweise einem Repo-/Service-Namen: jede Session hört per Default auf den Namen " +
+      "ihres eigenen Arbeitsverzeichnisses. Zum Erreichen einer bestimmten abhängigen Session " +
+      "reicht es also, deren Repo-/Service-Namen zu kennen -- nicht ihre Session-ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        channel: {
+          type: "string",
+          description: "Ziel-Channel, typischerweise der Repo-/Service-Name der abhängigen Session",
+        },
+        summary: {
+          type: "string",
+          description: "Was sich geändert hat und was die betroffene Session ggf. anpassen muss",
+        },
+        workitem_ref: { type: "string", description: "Optional: zugehörige kw/OS-Workitem-ID" },
+      },
+      required: ["channel", "summary"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "ask_remote",
+    description:
+      "Stellt eine Rückfrage an den Menschen über den kw/OS Remote-Control-Kanal (PWA/Push) -- " +
+      "für Momente, in denen eine Entscheidung nötig ist, aber niemand am Terminal sitzt (nicht " +
+      "auf Tool-Freigaben beschränkt, z. B. eine fachliche Zwischenfrage). Wartet bis zu ~9,5 " +
+      "Minuten auf eine Antwort; kommt keine, meldet das Tool das klar zurück, statt unbegrenzt " +
+      "zu blockieren -- dann selbst sinnvoll weiterarbeiten oder den Nutzer im Terminal fragen.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        question: { type: "string" },
+        options: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optionale Antwortmöglichkeiten (Multiple-Choice); ohne Angabe kann frei geantwortet werden",
+        },
+      },
+      required: ["question"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 const server = new Server(
@@ -65,6 +113,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await relay.broadcast(args.text, args.workitem_ref);
         return { content: [{ type: "text", text: "Broadcast gesendet." }] };
       }
+      case "notify_dependents": {
+        const { channel, summary, workitem_ref } = args;
+        const result = await relay.publishToChannel(channel, summary, workitem_ref);
+        return {
+          content: [{ type: "text", text: `An ${result.fanout} Session(en) im Channel "${channel}" gesendet.` }],
+        };
+      }
+      case "ask_remote": {
+        const { question, options } = args;
+        const result = await relay.askRemote(question, options);
+        const text = result.status === "answered"
+          ? `Antwort erhalten: ${result.answer}`
+          : "Keine Antwort erhalten (Zeitfenster abgelaufen). Bitte selbst sinnvoll entscheiden " +
+            "oder den Nutzer im Terminal direkt fragen.";
+        return { content: [{ type: "text", text }] };
+      }
       default:
         throw new Error(`Unbekanntes Tool: ${name}`);
     }
@@ -76,11 +140,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-
-  if (!config.relayUrl) {
-    log.error("Kein KWOS_RELAY_URL — Tools sind registriert, Relay-Calls schlagen fehl.");
-    return;
-  }
 
   await ensureSessionId();
   try {

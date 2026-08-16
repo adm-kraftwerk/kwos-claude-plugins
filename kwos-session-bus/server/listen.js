@@ -11,7 +11,7 @@
 // liefert die Notification, was Claude damit macht, entscheidet die jeweilige Session selbst
 // (Reaction Policy §2.3: wie User-Input behandeln, nicht blind ausführen).
 
-import { config, ensureSessionId } from "./config.js";
+import { ensureSessionId } from "./config.js";
 import { log } from "./log.js";
 import * as relay from "./relay-client.js";
 import { runSseReceiver } from "./sse-receiver.js";
@@ -28,11 +28,6 @@ function formatLine(rawData) {
 }
 
 async function main() {
-  if (!config.relayUrl) {
-    log.error("Kein KWOS_RELAY_URL — Listener kann nicht starten.");
-    process.exit(1);
-  }
-
   // Eigenständig registrieren statt sich auf die Startreihenfolge des MCP-Servers zu
   // verlassen (register ist idempotent) — vermeidet eine Race zwischen den beiden
   // unabhängig gestarteten Prozessen (MCP-Server per stdio, dieser Monitor per `monitors`).

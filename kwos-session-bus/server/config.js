@@ -67,6 +67,19 @@ function deriveDisplayName(cwd) {
   return base && base.trim() ? base : "Claude Code Session";
 }
 
+// Pub/Sub-Channels (WI 10383787): jede Session hoert per Default auf einen Channel gleich dem
+// Basename ihres Arbeitsverzeichnisses (dieselbe Ableitung wie displayName, s. o.) -- wer den
+// Repo-/Service-Namen kennt, kann die Session damit erreichen, ohne ihre Session-ID zu kennen.
+// KWOS_CHANNELS (optional, kommagetrennt) fuer zusaetzliche Channels, die diese Session AUCH
+// hoeren soll (z.B. eine konsumierende Session, die den Channel des Services abonniert, von dem
+// sie abhaengt). Der Relay mergt Channels aus mehreren Registrierungen per ARRAY-UNION (s.
+// relay/server.js) -- kommt KWOS_CHANNELS beim `monitors`-Prozess nicht an (kein Env-Overlay dort,
+// s. RELAY_URL oben), geht dadurch nichts verloren, nur der stdio-MCP-Server traegt es bei.
+function deriveChannels(cwd) {
+  const extra = (process.env.KWOS_CHANNELS || "").split(",").map((c) => c.trim()).filter(Boolean);
+  return [...new Set([deriveDisplayName(cwd), ...extra])];
+}
+
 // Hook und dieser Prozess starten unabhaengig voneinander (SessionStart-Hook vs. `monitors`/
 // stdio-MCP) -- kurzes Polling statt eines einmaligen Checks, damit die Reihenfolge egal ist.
 async function resolveSessionId() {
@@ -93,6 +106,7 @@ export const config = {
   tokenOverride: TOKEN_OVERRIDE,
   sessionId: undefined,
   displayName: process.env.KWOS_SESSION_DISPLAY_NAME || deriveDisplayName(process.cwd()),
+  channels: deriveChannels(process.cwd()),
   heartbeatIntervalMs: 5 * 60 * 1000, // Vorschlag Server-Spec §3.1: alle 5 Min
   ttlMinutes: 30,
 };

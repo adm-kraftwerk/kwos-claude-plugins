@@ -1,15 +1,23 @@
 # kwos-session-bus
 
-MCP-Client-Plugin für den kw/OS Session Message Relay. Bildet die drei MVP-Tools auf den
+MCP-Client-Plugin für den kw/OS Session Message Relay. Bildet die MVP-Tools auf den
 REST/SSE-Vertrag aus Workitem-9831619 §4 ab. Spec (Client-Seite): Workitem-9831620.
+Erweitert um Channel-Pub/Sub (Workitem-10383787) und Remote-Rückfragen (Workitem-10383786).
 
-## Scope (MVP)
+## Scope
 
 Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-Session:
 
 - **MCP-Server** (`.mcp.json` → `server/index.js`, stdio): Tools `list_sessions`,
-  `send_message`, `broadcast`. Registriert sich bei Start, danach Heartbeat alle 5 Min
-  (TTL 30 Min).
+  `send_message`, `broadcast`, `notify_dependents`, `ask_remote`. Registriert sich bei Start,
+  danach Heartbeat alle 5 Min (TTL 30 Min).
+  - `notify_dependents(channel, summary, workitem_ref?)`: benachrichtigt ALLE Sessions (auch
+    fremder Nutzer/Teams), die einen Channel abonniert haben — z. B. bei einer geänderten
+    Schnittstelle zwischen zwei Services. Jede Session abonniert per Default den Basename ihres
+    eigenen Arbeitsverzeichnisses (`KWOS_CHANNELS`, kommagetrennt, für zusätzliche Channels).
+  - `ask_remote(question, options?)`: generalisierter Async-Human-in-the-loop über
+    PreToolUse-Freigaben hinaus — wartet bis zu ~9,5 Min auf eine Antwort über die
+    Remote-Control-PWA, liefert bei Zeitablauf ein klares "keine Antwort" statt zu blockieren.
 - **Background-Monitor** (`monitors/monitors.json` → `server/listen.js`): nutzt das
   offizielle Claude-Code-`monitors`-Primitiv statt eines selbstgebauten Companion-Prozesses
   (Option A aus Workitem-9831620 §2.2, jetzt auf offiziellem Fundament — siehe Kommentar
@@ -34,6 +42,7 @@ behandeln, nicht blind ausführen).
 | `KWOS_XID_TOKEN_HELPER_PATH` | nein | Override für den Pfad zum `xiam-token.sh`/`.ps1`-Helper (Default: `~/.config/kraftwerk/xiam-token.{sh,ps1}`, siehe unten) |
 | `CLAUDE_CODE_SESSION_ID` | nein | Override für die Session-ID; normalerweise per SessionStart-Hook aus Marker-Datei gelöst (siehe unten) |
 | `KWOS_SESSION_DISPLAY_NAME` | nein | Override für den Anzeigenamen (Default: Basename des Arbeitsverzeichnisses, siehe unten) |
+| `KWOS_CHANNELS` | nein | Kommagetrennte ZUSÄTZLICHE Channels (Pub/Sub, WI 10383787) — Default-Channel ist immer der Basename des Arbeitsverzeichnisses, unabhängig davon |
 
 ## Offene Punkte (bewusst nicht stillschweigend geraten)
 

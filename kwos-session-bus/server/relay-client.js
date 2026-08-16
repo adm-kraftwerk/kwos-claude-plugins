@@ -49,7 +49,7 @@ async function call(path, { method = "GET", body, headers } = {}) {
 export function register() {
   return call("/v1/sessions/register", {
     method: "POST",
-    body: { session_id: config.sessionId, display_name: config.displayName },
+    body: { session_id: config.sessionId, display_name: config.displayName, channels: config.channels },
   });
 }
 
@@ -89,4 +89,31 @@ export async function broadcast(text, workitemRef) {
 /** URL für den SSE-Empfang, GET /v1/sessions/{self}/events. */
 export function eventsUrl() {
   return `${config.relayUrl}/v1/sessions/${encodeURIComponent(config.sessionId)}/events`;
+}
+
+/**
+ * POST /v1/channels/{channel}/publish — Tool notify_dependents (WI 10383787).
+ * Erreicht JEDE Session (auch fremder Subjects/Teams), die diesen Channel abonniert hat --
+ * bewusst ohne canSend-Team-Schranke (Channel = explizites gegenseitiges Opt-in, s. relay/server.js).
+ */
+export async function publishToChannel(channel, text, workitemRef) {
+  const { data } = await call(`/v1/channels/${encodeURIComponent(channel)}/publish`, {
+    method: "POST",
+    body: { from: config.sessionId, text, workitem_ref: workitemRef },
+  });
+  return data ?? { channel, fanout: 0, results: [] };
+}
+
+/**
+ * POST /v1/questions — Tool ask_remote (WI 10383786). Blockiert server-seitig bis zu ~9,5 Min
+ * (relay/server.js QUESTION_WAIT_MS), bis eine Antwort ueber die PWA kommt oder das Zeitfenster
+ * ablaeuft. Liefert { status: "answered", answer } oder { status: "timeout" } -- niemals einen
+ * Fehler nur wegen Zeitablauf, damit der Agent selbst entscheiden kann, wie es weitergeht.
+ */
+export async function askRemote(question, options) {
+  const { data } = await call("/v1/questions", {
+    method: "POST",
+    body: { session_id: config.sessionId, question, options },
+  });
+  return data ?? { status: "timeout" };
 }
