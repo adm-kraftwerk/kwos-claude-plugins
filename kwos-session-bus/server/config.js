@@ -67,6 +67,29 @@ function deriveDisplayName(cwd) {
   return base && base.trim() ? base : "Claude Code Session";
 }
 
+// Nutzer-eigener Name (`claude --name`/`-n` beim Start, oder `/rename` waehrend der Sitzung) ist
+// informativer als der cwd-Basename -- besonders wenn dasselbe Repo mehrfach parallel laeuft und
+// alle Karten in der PWA sonst identisch "litellm" heissen. Claude Code fuehrt dafuer lokal pro
+// laufendem Prozess ~/.claude/sessions/<pid>.json, z. B. {"pid":64745,"cwd":"...",
+// "name":"litellm-00","nameSource":"derived"} -- kein Hook traegt den Namen im Payload (gegen die
+// offizielle Hooks-Doku geprueft), das ist der einzig verlaessliche Weg ohne die Statusline zu
+// kapern. `nameSource` unterscheidet Claude Codes Auto-Slug ("derived") von einem echten
+// Nutzer-Namen -- nur Letzterer ist informativer als der Basename, ein Auto-Slug waere kein
+// Gewinn gegenueber deriveDisplayName().
+// process.ppid ist fuer den stdio-MCP-Server die PID des startenden claude-Prozesses (direktes
+// Kind) -- fuer `monitors` (Bash-Snapshot-Mechanik, s. RELAY_URL oben) ist der Elternprozess
+// vermutlich eine Shell, nicht claude selbst, die Datei existiert dann unter dieser PID schlicht
+// nicht. Kein Fehlerfall: faellt sauber auf deriveDisplayName() zurueck, wie bei RELAY_URL/
+// KWOS_CHANNELS oben.
+function readClaudeSessionName() {
+  try {
+    const raw = readFileSync(join(homedir(), ".claude", "sessions", `${process.ppid}.json`), "utf8");
+    const { name, nameSource } = JSON.parse(raw);
+    if (typeof name === "string" && name.trim() && nameSource !== "derived") return name.trim();
+  } catch { /* Datei fehlt/kaputt/falsche PID (Monitor-Pfad) -- Fallback deriveDisplayName() */ }
+  return null;
+}
+
 // Pub/Sub-Channels (WI 10383787): jede Session hoert per Default auf einen Channel gleich dem
 // Basename ihres Arbeitsverzeichnisses (dieselbe Ableitung wie displayName, s. o.) -- wer den
 // Repo-/Service-Namen kennt, kann die Session damit erreichen, ohne ihre Session-ID zu kennen.
@@ -105,7 +128,7 @@ export const config = {
   tokenHelperPath: TOKEN_HELPER_PATH,
   tokenOverride: TOKEN_OVERRIDE,
   sessionId: undefined,
-  displayName: process.env.KWOS_SESSION_DISPLAY_NAME || deriveDisplayName(process.cwd()),
+  displayName: process.env.KWOS_SESSION_DISPLAY_NAME || readClaudeSessionName() || deriveDisplayName(process.cwd()),
   channels: deriveChannels(process.cwd()),
   heartbeatIntervalMs: 5 * 60 * 1000, // Vorschlag Server-Spec §3.1: alle 5 Min
   ttlMinutes: 30,

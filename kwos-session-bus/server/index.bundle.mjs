@@ -15531,6 +15531,15 @@ function deriveDisplayName(cwd) {
   const base = norm.split(/[\\/]/).pop();
   return base && base.trim() ? base : "Claude Code Session";
 }
+function readClaudeSessionName() {
+  try {
+    const raw = readFileSync(join(homedir(), ".claude", "sessions", `${process.ppid}.json`), "utf8");
+    const { name, nameSource } = JSON.parse(raw);
+    if (typeof name === "string" && name.trim() && nameSource !== "derived") return name.trim();
+  } catch {
+  }
+  return null;
+}
 function deriveChannels(cwd) {
   const extra = (process.env.KWOS_CHANNELS || "").split(",").map((c) => c.trim()).filter(Boolean);
   return [.../* @__PURE__ */ new Set([deriveDisplayName(cwd), ...extra])];
@@ -15554,7 +15563,7 @@ var config2 = {
   tokenHelperPath: TOKEN_HELPER_PATH,
   tokenOverride: TOKEN_OVERRIDE,
   sessionId: void 0,
-  displayName: process.env.KWOS_SESSION_DISPLAY_NAME || deriveDisplayName(process.cwd()),
+  displayName: process.env.KWOS_SESSION_DISPLAY_NAME || readClaudeSessionName() || deriveDisplayName(process.cwd()),
   channels: deriveChannels(process.cwd()),
   heartbeatIntervalMs: 5 * 60 * 1e3,
   // Vorschlag Server-Spec §3.1: alle 5 Min
