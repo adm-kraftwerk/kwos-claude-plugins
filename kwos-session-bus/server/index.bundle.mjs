@@ -15579,6 +15579,7 @@ import { spawn } from "node:child_process";
 import { existsSync as existsSync2 } from "node:fs";
 import { platform as platform2 } from "node:os";
 var HELPER_TIMEOUT_MS = 2e4;
+var XID_ISSUER = process.env.XIAM_ISSUER || "https://xid.supinfo.de";
 function runHelper() {
   return new Promise((resolve, reject) => {
     const isWin = platform2() === "win32";
@@ -15619,6 +15620,43 @@ function runHelper() {
     });
   });
 }
+async function probeNodeNetwork() {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5e3);
+    const r = await fetch(`${XID_ISSUER}/.well-known/openid-configuration`, { signal: ctrl.signal });
+    clearTimeout(t);
+    return { ok: r.ok, status: r.status };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+function probeShellEnv(env) {
+  return new Promise((resolve) => {
+    const isWin = platform2() === "win32";
+    const cmd = isWin ? "powershell" : "bash";
+    const args = isWin ? [
+      "-NoProfile",
+      "-Command",
+      "'HOME=' + $env:USERPROFILE; 'PATH=' + $env:PATH; (Get-Command python3,python -ErrorAction SilentlyContinue | Select-Object -First 1).Source"
+    ] : ["-c", 'echo "HOME=$HOME"; echo "PATH=$PATH"; command -v python3 || command -v python || command -v py || echo "kein Interpreter gefunden"'];
+    const child = spawn(cmd, args, { env, stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    let done = false;
+    const finish = (v) => {
+      if (!done) {
+        done = true;
+        resolve(v);
+      }
+    };
+    child.stdout.on("data", (d) => {
+      out += d;
+    });
+    child.on("close", () => finish(out.trim()));
+    child.on("error", (e) => finish(`probe fehlgeschlagen: ${e.message}`));
+    setTimeout(() => finish(out.trim() || "probe timeout nach 5000ms"), 5e3).unref();
+  });
+}
 var cachedToken;
 async function getAccessToken() {
   if (config2.tokenOverride) return config2.tokenOverride;
@@ -15639,6 +15677,17 @@ async function getAccessToken() {
       });
       return cachedToken;
     }
+    const env = { ...process.env, XIAM_REFRESH_ONLY: "1" };
+    delete env.KWOS_LOGIN_INTERACTIVE;
+    const [nodeFetchToXid, shellEnvSeenByHelper] = await Promise.all([
+      probeNodeNetwork(),
+      probeShellEnv(env)
+    ]);
+    log.error("xiam-token Helper fehlgeschlagen -- Diagnose.", {
+      error: String(err),
+      nodeFetchToXid,
+      shellEnvSeenByHelper
+    });
     throw new Error(`Kein XID-Access-Token verf\xFCgbar: ${err}`);
   }
 }
