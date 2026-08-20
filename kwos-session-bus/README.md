@@ -9,8 +9,8 @@ Erweitert um Channel-Pub/Sub (Workitem-10383787) und Remote-Rückfragen (Workite
 Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-Session:
 
 - **MCP-Server** (`.mcp.json` → `server/index.js`, stdio): Tools `list_sessions`,
-  `send_message`, `broadcast`, `notify_dependents`, `ask_remote`. Registriert sich bei Start,
-  danach Heartbeat alle 5 Min (TTL 30 Min).
+  `send_message`, `broadcast`, `notify_dependents`, `ask_remote`, `get_attachment`. Registriert
+  sich bei Start, danach Heartbeat alle 5 Min (TTL 30 Min).
   - `notify_dependents(channel, summary, workitem_ref?)`: benachrichtigt ALLE Sessions (auch
     fremder Nutzer/Teams), die einen Channel abonniert haben — z. B. bei einer geänderten
     Schnittstelle zwischen zwei Services. Jede Session abonniert per Default den Basename ihres
@@ -18,12 +18,19 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
   - `ask_remote(question, options?)`: generalisierter Async-Human-in-the-loop über
     PreToolUse-Freigaben hinaus — wartet bis zu ~9,5 Min auf eine Antwort über die
     Remote-Control-PWA, liefert bei Zeitablauf ein klares "keine Antwort" statt zu blockieren.
+  - `get_attachment(attachment_id)` (WI 10460008, Phase 2 zu MR !8 im litellm-Repo): löst eine
+    `attachment_id` (steckt im Notification-Hinweis einer Nachricht mit Bild) in einen echten
+    Bild-Content-Block auf (`GET /v1/attachments/:id`) — bewusst NICHT als Base64-Text, das
+    sieht ein Sprachmodell nicht als Bild. Kein Autowake: die Session entscheidet selbst, ob/
+    wann sie ein angekündigtes Bild abruft.
 - **Background-Monitor** (`monitors/monitors.json` → `server/listen.js`): nutzt das
   offizielle Claude-Code-`monitors`-Primitiv statt eines selbstgebauten Companion-Prozesses
   (Option A aus Workitem-9831620 §2.2, jetzt auf offiziellem Fundament — siehe Kommentar
   vom 2026-07-16). Hält die SSE-Verbindung zum Relay offen (Reconnect via Last-Event-ID) und
   gibt pro eingehender Nachricht eine formatierte Zeile (`[from]: text`) auf stdout aus —
-  jede Zeile liefert Claude Code automatisch als Notification an die Session.
+  jede Zeile liefert Claude Code automatisch als Notification an die Session. Trägt eine
+  Nachricht eine `attachment_id`, wird das als zusätzlicher Hinweis in derselben Zeile
+  angehängt (kein eigener Kanal, kein Autowake).
 
 Explizit **nicht** im MVP: Desktop-Integration (Claude Desktop hat kein `monitors`-Äquivalent,
 bleibt bei reiner Notification ohne Autowake, siehe §2.2), Rate-Limiting/Loop-Detection auf
