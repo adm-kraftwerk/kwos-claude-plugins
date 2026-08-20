@@ -117,3 +117,28 @@ export async function askRemote(question, options) {
   });
   return data ?? { status: "timeout" };
 }
+
+/**
+ * GET /v1/attachments/{id} — Tool get_attachment (WI 10460008, Phase 2). Liefert KEIN JSON
+ * (roher Bild-Body + Content-Type), deshalb eigener Fetch statt call() (das jede Antwort per
+ * res.json() parst). Autorisierung spiegelt serverseitig relay/server.js: Sender, Owner der
+ * Empfaenger-Session, oder gleiches Team -- ein 403/404 hier ist also kein Bug, sondern bedeutet
+ * "diese Session darf/kann das Bild nicht sehen".
+ */
+export async function getAttachment(id) {
+  if (!config.relayUrl) {
+    throw new Error("KWOS_RELAY_URL ist nicht gesetzt.");
+  }
+  const token = await getAccessToken();
+  const res = await fetch(`${config.relayUrl}/v1/attachments/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Relay GET /v1/attachments/${id} -> ${res.status}: ${text}`);
+  }
+  // image/jpeg|png|webp -- s. okAttachmentMime in relay/lib.js, kein anderer Wert moeglich.
+  const mimeType = res.headers.get("content-type") || "application/octet-stream";
+  const buf = Buffer.from(await res.arrayBuffer());
+  return { mimeType, data: buf.toString("base64") };
+}

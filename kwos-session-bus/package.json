@@ -1,12 +1,13 @@
 {
   "name": "kwos-session-bus",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "type": "module",
   "description": "Lokaler stdio-MCP-Server, der die kw/OS Session-Relay-REST/SSE-Schnittstelle (Workitem-9831619 §4) auf MCP-Tools abbildet (Workitem-9831620).",
   "main": "server/index.bundle.mjs",
   "scripts": {
-    "build": "esbuild server/index.js --bundle --platform=node --format=esm --outfile=server/index.bundle.mjs --external:node:*"
+    "build": "esbuild server/index.js --bundle --platform=node --format=esm --outfile=server/index.bundle.mjs --external:node:*",
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"

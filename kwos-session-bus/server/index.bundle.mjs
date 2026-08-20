@@ -6914,6 +6914,9 @@ var require_dist = __commonJS({
   }
 });
 
+// server/index.js
+import { fileURLToPath } from "node:url";
+
 // node_modules/zod/v4/core/core.js
 var _a;
 // @__NO_SIDE_EFFECTS__
@@ -15760,6 +15763,22 @@ async function askRemote(question, options) {
   });
   return data ?? { status: "timeout" };
 }
+async function getAttachment(id) {
+  if (!config2.relayUrl) {
+    throw new Error("KWOS_RELAY_URL ist nicht gesetzt.");
+  }
+  const token = await getAccessToken();
+  const res = await fetch(`${config2.relayUrl}/v1/attachments/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Relay GET /v1/attachments/${id} -> ${res.status}: ${text}`);
+  }
+  const mimeType = res.headers.get("content-type") || "application/octet-stream";
+  const buf = Buffer.from(await res.arrayBuffer());
+  return { mimeType, data: buf.toString("base64") };
+}
 
 // server/index.js
 var TOOLS = [
@@ -15831,51 +15850,71 @@ var TOOLS = [
       required: ["question"],
       additionalProperties: false
     }
+  },
+  {
+    name: "get_attachment",
+    description: "L\xF6st eine attachment_id (steckt im Notification-Hinweis einer eingegangenen Nachricht, wenn ein Bild angeh\xE4ngt ist) in einen echten Bild-Content-Block auf -- NICHT als Base64-Text, ein Sprachmodell sieht rohen Base64 nicht als Bild. Nur aufrufen, wenn die Session sich entscheidet, ein angek\xFCndigtes Bild tats\xE4chlich anzusehen.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        attachment_id: { type: "string", description: "UUID aus dem attachment_id-Feld der Notification" }
+      },
+      required: ["attachment_id"],
+      additionalProperties: false
+    }
   }
 ];
 var server = new Server(
-  { name: "kwos-session-bus", version: "0.3.1" },
+  { name: "kwos-session-bus", version: "0.3.4" },
   { capabilities: { tools: {} } }
 );
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+async function handleToolCall(name, args = {}) {
+  switch (name) {
+    case "list_sessions": {
+      const sessions = await listSessions();
+      return { content: [{ type: "text", text: JSON.stringify(sessions, null, 2) }] };
+    }
+    case "send_message": {
+      const { target, text, workitem_ref } = args;
+      const result = await sendMessage(target, text, workitem_ref);
+      const status = result.delivered ? "zugestellt" : "eingereiht (Zielsession offline)";
+      return { content: [{ type: "text", text: `Nachricht ${status}.` }] };
+    }
+    case "broadcast": {
+      await broadcast(args.text, args.workitem_ref);
+      return { content: [{ type: "text", text: "Broadcast gesendet." }] };
+    }
+    case "notify_dependents": {
+      const { channel, summary, workitem_ref } = args;
+      const result = await publishToChannel(channel, summary, workitem_ref);
+      return {
+        content: [{ type: "text", text: `An ${result.fanout} Session(en) im Channel "${channel}" gesendet.` }]
+      };
+    }
+    case "ask_remote": {
+      const { question, options } = args;
+      const result = await askRemote(question, options);
+      const text = result.status === "answered" ? `Antwort erhalten: ${result.answer}` : "Keine Antwort erhalten (Zeitfenster abgelaufen). Bitte selbst sinnvoll entscheiden oder den Nutzer im Terminal direkt fragen.";
+      return { content: [{ type: "text", text }] };
+    }
+    case "get_attachment": {
+      const { mimeType, data } = await getAttachment(args.attachment_id);
+      return { content: [{ type: "image", data, mimeType }] };
+    }
+    default:
+      throw new Error(`Unbekanntes Tool: ${name}`);
+  }
+}
+async function callTool(request) {
   const { name, arguments: args = {} } = request.params;
   try {
-    switch (name) {
-      case "list_sessions": {
-        const sessions = await listSessions();
-        return { content: [{ type: "text", text: JSON.stringify(sessions, null, 2) }] };
-      }
-      case "send_message": {
-        const { target, text, workitem_ref } = args;
-        const result = await sendMessage(target, text, workitem_ref);
-        const status = result.delivered ? "zugestellt" : "eingereiht (Zielsession offline)";
-        return { content: [{ type: "text", text: `Nachricht ${status}.` }] };
-      }
-      case "broadcast": {
-        await broadcast(args.text, args.workitem_ref);
-        return { content: [{ type: "text", text: "Broadcast gesendet." }] };
-      }
-      case "notify_dependents": {
-        const { channel, summary, workitem_ref } = args;
-        const result = await publishToChannel(channel, summary, workitem_ref);
-        return {
-          content: [{ type: "text", text: `An ${result.fanout} Session(en) im Channel "${channel}" gesendet.` }]
-        };
-      }
-      case "ask_remote": {
-        const { question, options } = args;
-        const result = await askRemote(question, options);
-        const text = result.status === "answered" ? `Antwort erhalten: ${result.answer}` : "Keine Antwort erhalten (Zeitfenster abgelaufen). Bitte selbst sinnvoll entscheiden oder den Nutzer im Terminal direkt fragen.";
-        return { content: [{ type: "text", text }] };
-      }
-      default:
-        throw new Error(`Unbekanntes Tool: ${name}`);
-    }
+    return await handleToolCall(name, args);
   } catch (err) {
     return { content: [{ type: "text", text: `Fehler: ${err.message}` }], isError: true };
   }
-});
+}
+server.setRequestHandler(CallToolRequestSchema, callTool);
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
@@ -15891,7 +15930,15 @@ async function main() {
   }, config2.heartbeatIntervalMs);
   heartbeatTimer.unref();
 }
-main().catch((err) => {
-  log.error("Unerwarteter Fehler beim Start.", { error: String(err) });
-  process.exit(1);
-});
+var isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
+  main().catch((err) => {
+    log.error("Unerwarteter Fehler beim Start.", { error: String(err) });
+    process.exit(1);
+  });
+}
+export {
+  TOOLS,
+  callTool,
+  handleToolCall
+};
