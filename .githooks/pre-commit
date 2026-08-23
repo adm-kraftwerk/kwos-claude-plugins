@@ -1,0 +1,34 @@
+#!/bin/sh
+# Runs "claude plugin validate" on every plugin whose files are staged, plus the
+# marketplace manifest if it changed. Fail-open if the claude CLI isn't installed
+# (mirrors the fail-open convention for optional toolchains in the sibling
+# litellm repo's .githooks/pre-commit).
+
+if ! command -v claude >/dev/null 2>&1; then
+  echo "pre-commit: claude CLI not found, skipping plugin validation" >&2
+  exit 0
+fi
+
+changed=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$changed" ] && exit 0
+
+fail=0
+
+plugins=$(printf '%s\n' "$changed" | awk -F/ 'NF>1 && $1 !~ /^\./ {print $1}' | sort -u)
+for p in $plugins; do
+  [ -f "$p/.claude-plugin/plugin.json" ] || continue
+  echo "pre-commit: claude plugin validate $p"
+  claude plugin validate "$p" || fail=1
+done
+
+if printf '%s\n' "$changed" | grep -qx '\.claude-plugin/marketplace\.json'; then
+  echo "pre-commit: claude plugin validate . (marketplace)"
+  claude plugin validate . || fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "pre-commit: claude plugin validate failed - fix, or commit --no-verify to bypass" >&2
+  exit 1
+fi
+
+exit 0
