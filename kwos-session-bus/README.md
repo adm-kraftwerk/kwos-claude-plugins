@@ -9,8 +9,8 @@ Erweitert um Channel-Pub/Sub (Workitem-10383787) und Remote-Rückfragen (Workite
 Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-Session:
 
 - **MCP-Server** (`.mcp.json` → `server/index.js`, stdio): Tools `list_sessions`,
-  `send_message`, `broadcast`, `notify_dependents`, `ask_remote`, `get_attachment`. Registriert
-  sich bei Start, danach Heartbeat alle 5 Min (TTL 30 Min).
+  `send_message`, `broadcast`, `notify_dependents`, `ask_remote`, `get_message`, `get_attachment`.
+  Registriert sich bei Start, danach Heartbeat alle 5 Min (TTL 30 Min).
   - `notify_dependents(channel, summary, workitem_ref?)`: benachrichtigt ALLE Sessions (auch
     fremder Nutzer/Teams), die einen Channel abonniert haben — z. B. bei einer geänderten
     Schnittstelle zwischen zwei Services. Jede Session abonniert per Default den Basename ihres
@@ -18,6 +18,21 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
   - `ask_remote(question, options?)`: generalisierter Async-Human-in-the-loop über
     PreToolUse-Freigaben hinaus — wartet bis zu ~9,5 Min auf eine Antwort über die
     Remote-Control-PWA, liefert bei Zeitablauf ein klares "keine Antwort" statt zu blockieren.
+  - `get_message(seq)` (WI 11075502): holt den vollständigen Text einer eingegangenen Nachricht
+    nach. Nötig, weil der Monitor lange Nachrichten kappen MUSS (s. unten) und in der
+    Notification nur noch `[+N Zeichen -- get_message(seq=S)]` nennt. Nutzt den bestehenden
+    Relay-Endpunkt `GET /v1/sessions/{self}/messages?since=` — kein Relay-Deploy nötig.
+    - **Geteilte Nachrichten werden wieder zusammengesetzt.** Der Relay teilt lange Nachrichten
+      schon VOR dem Speichern in nummerierte Teile `(i/n)` mit je eigener `seq`
+      (`relay/lib.js` `splitLongMessage`, `MESSAGE_SPLIT_MAX_LEN = 900`) — ein 5000-Zeichen-Bericht
+      sind dort also sechs Zeilen. `get_message` erkennt die Nummerierung und holt sich bei einem
+      Aufruf mit der `seq` eines *mittleren* Teils (der Normalfall — jede gekappte Zeile trägt ihre
+      eigene `seq` im Marker) über eine zweite Seite den Kopf dazu. Fehlt ein Teil, sagt die Antwort
+      das ausdrücklich (`UNVOLLSTÄNDIG` + die fehlenden `seq`s), statt einen Ausschnitt als das
+      Ganze auszugeben.
+    - **Näherung, kein Byte-Identismus:** an den Nahtstellen wird ein Leerzeichen eingefügt. Beim
+      Wortgrenzen-Schnitt des Relays ist das genau das entfernte Trennzeichen; beim harten Schnitt
+      (kein Leerzeichen im Fenster) entsteht dadurch eines zuviel.
   - `get_attachment(attachment_id)` (WI 10460008, Phase 2 zu MR !8 im litellm-Repo): löst eine
     `attachment_id` (steckt im Notification-Hinweis einer Nachricht mit Bild) in einen echten
     Bild-Content-Block auf (`GET /v1/attachments/:id`) — bewusst NICHT als Base64-Text, das
@@ -27,10 +42,49 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
   offizielle Claude-Code-`monitors`-Primitiv statt eines selbstgebauten Companion-Prozesses
   (Option A aus Workitem-9831620 §2.2, jetzt auf offiziellem Fundament — siehe Kommentar
   vom 2026-07-16). Hält die SSE-Verbindung zum Relay offen (Reconnect via Last-Event-ID) und
-  gibt pro eingehender Nachricht eine formatierte Zeile (`[from]: text`) auf stdout aus —
-  jede Zeile liefert Claude Code automatisch als Notification an die Session. Trägt eine
-  Nachricht eine `attachment_id`, wird das als zusätzlicher Hinweis in derselben Zeile
-  angehängt (kein eigener Kanal, kein Autowake).
+  gibt pro eingehender Nachricht eine formatierte Zeile (`[from]: text`) auf stdout aus.
+  Trägt eine Nachricht eine `attachment_id`, wird das als zusätzlicher Hinweis in derselben
+  Zeile angehängt (kein eigener Kanal, kein Autowake).
+
+  **Zeilenbudget — die frühere Annahme "jede Zeile ist eine eigene Notification" ist widerlegt
+  (WI 11075502, gemessen):** Claude Code kappt jede Monitor-Zeile bei **500 Zeichen** (eine
+  500er Zeile kommt vollständig an, eine 501er verliert ein Zeichen und bekommt
+  `...(truncated)`); gezählt werden **Zeichen, nicht Bytes** (nachgemessen mit einer Zeile aus
+  501 Umlauten = 1002 Bytes: gekappt wird erst bei Zeichen 500). Zeilen, die dicht beieinander
+  geschrieben werden, werden zu **einer** Notification gebündelt und dann bei **3000 Zeichen**
+  gekappt. Gekappt wird am Zeilenende — also genau der Bild-Hinweis, der den Abruf erst
+  ermöglicht. `formatLine()` kappt deshalb selbst auf `MAX_LINE_CHARS` (480, Reserve unter der
+  500er-Grenze) und schreibt stattdessen `… [+N Zeichen -- get_message(seq=S)]`; der Bild-Hinweis
+  bleibt damit erhalten. Ohne `seq` (Nachricht ohne Relay-seq) bleibt nur `[+N Zeichen]` — dann
+  ist der Rest nicht nachholbar.
+
+  **Zeilenabstand gegen die Bündelung:** weil das 3000-Zeichen-Limit **pro Notification** gilt und
+  gebündelte Zeilen am Ende gekappt werden, reicht Zeilenkürzung allein nicht — gemessen verliert
+  ein Schwall aus 12 Zeilen à 480 Zeichen ohne Abstand die Zeilen A08–A12 **spurlos, samt
+  `seq`-Marker, also nicht nachholbar**. `createLineWriter()` schreibt deshalb mit
+  `LINE_SPACING_MS` (250 ms, über dem gemessenen Bündelungsfenster von ~200 ms) Abstand zwischen
+  aufeinanderfolgenden Zeilen. Eine einzelne Nachricht wird nie verzögert; nur ein Schwall — real
+  erreichbar, weil der Relay beim SSE-Reconnect bis zu 500 Backlog-Nachrichten in einer engen
+  Schleife liefert — wird auseinandergezogen. End-to-end nachgemessen: 8 Zeilen à 480 Zeichen
+  (3840 Zeichen, ohne Abstand also gekappt) kommen als **8 eigene, vollständige** Notifications an.
+  **Bekannte Restgrenzen des Zeilenabstands:**
+  - **Weckrufe:** der Relay-Autor hat beim Bau der Teilung ausdrücklich darauf gezählt, dass der
+    Harness die Teile zu EINER Notification bündelt (`relay/server.js`: „muss der Monitor dann
+    nicht verstehen, dass noch Teile nachkommen, sonst weckt er das LLM mehrfach?"). Der Abstand
+    hebt genau diese Bündelung auf — gewollt, weil die Bündelung nachweislich bei 3000 Zeichen
+    kappt und die Teile dahinter spurlos verschwinden. Folge: eine geteilte Nachricht erzeugt jetzt
+    **eine Notification pro Teil** statt einer (potenziell gekappten). Ob N Weckrufe pro Nachricht
+    akzeptabel sind, ist eine Produktentscheidung und **nicht** von diesem Plugin allein zu
+    beantworten.
+  - **Durchsatz:** der Abstand deckelt die Ausgabe auf 4 Zeilen/s. Ein Reconnect-Backlog ist
+    begrenzt (Relay `LIMIT 500` ≈ 125 s), aber dauerhafter Verkehr darüber hinaus lässt
+    Warteschlange und Zustell-Verzug unbegrenzt wachsen. Es gibt keine Drop-Policy — sie müsste die
+    ältesten, noch ungelesenen Zeilen wegwerfen, also genau das Falsche. Beim Session-Ende wird die
+    Warteschlange per `flush()` ausgeliefert.
+  - **Die Warteschlange ist die einzige Kopie:** der Relay markiert Backlog-Zeilen beim Schreiben
+    der SSE-Frames als zugestellt (`relay/server.js` `markDelivered`). Wird der Monitor-Prozess
+    vorher beendet, sind sie weg — und es wurde nie ein `seq`-Marker ausgegeben, `get_message`
+    kann sie also nicht nachholen.
 
 Explizit **nicht** im MVP: Desktop-Integration (Claude Desktop hat kein `monitors`-Äquivalent,
 bleibt bei reiner Notification ohne Autowake, siehe §2.2), Rate-Limiting/Loop-Detection auf

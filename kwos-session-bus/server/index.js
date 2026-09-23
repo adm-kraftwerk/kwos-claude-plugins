@@ -88,6 +88,26 @@ export const TOOLS = [
     },
   },
   {
+    name: "get_message",
+    description:
+      "Holt den vollständigen Text einer eingegangenen Session-Bus-Nachricht nach. Claude Code " +
+      "kappt Monitor-Zeilen bei 500 Zeichen, deshalb kürzt der Monitor lange Nachrichten selbst " +
+      "und schreibt stattdessen einen Marker '[+N Zeichen -- get_message(seq=S)]' in die " +
+      "Notification. Mit diesem seq hier den vollen Text abrufen. Achtung: der Relay teilt sehr " +
+      "lange Nachrichten schon vor dem Speichern in nummerierte Teile '(i/n)' mit je eigener seq " +
+      "-- die Teile werden hier automatisch wieder zusammengesetzt; ist die Folge unvollständig, " +
+      "sagt die Antwort das ausdrücklich. Nur aufrufen, wenn die Nachricht tatsächlich " +
+      "vollständig gebraucht wird.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        seq: { type: "integer", description: "seq aus dem Marker der Notification" },
+      },
+      required: ["seq"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_attachment",
     description:
       "Löst eine attachment_id (steckt im Notification-Hinweis einer eingegangenen Nachricht, " +
@@ -106,7 +126,7 @@ export const TOOLS = [
 ];
 
 const server = new Server(
-  { name: "kwos-session-bus", version: "0.3.4" },
+  { name: "kwos-session-bus", version: "0.3.5" },
   { capabilities: { tools: {} } }
 );
 
@@ -148,6 +168,28 @@ export async function handleToolCall(name, args = {}) {
         : "Keine Antwort erhalten (Zeitfenster abgelaufen). Bitte selbst sinnvoll entscheiden " +
           "oder den Nutzer im Terminal direkt fragen.";
       return { content: [{ type: "text", text }] };
+    }
+    case "get_message": {
+      const msg = await relay.getMessage(args.seq);
+      // Der Bild-Hinweis wird nur genannt, nicht ausgeloest -- den Abruf entscheidet weiterhin
+      // get_attachment (kein Autowake, s. get_attachment oben).
+      const hint = msg.attachment_id
+        ? `\n[Bild angehängt, attachment_id=${msg.attachment_id} -- mit get_attachment abrufbar]`
+        : "";
+      // Eine unvollstaendige Teilfolge wird ausdruecklich gemeldet. Stillschweigend den
+      // vorhandenen Rest zu liefern, waere genau der Fehler, den dieser Fix behebt: der Leser
+      // haelt einen Ausschnitt fuer das Ganze.
+      const warning = msg.incomplete
+        ? `\n[UNVOLLSTÄNDIG: diese Nachricht wurde vom Relay in ${msg.chunks} Teile geteilt; ` +
+          [
+            msg.missingHead ? "die Kopfteile fehlen (nicht mehr abrufbar)" : null,
+            msg.missingSeqs.length ? `es fehlen die Teile mit seq=${msg.missingSeqs.join(", ")}` : null,
+          ]
+            .filter(Boolean)
+            .join("; ") +
+          ".]"
+        : "";
+      return { content: [{ type: "text", text: `${msg.text ?? ""}${hint}${warning}` }] };
     }
     case "get_attachment": {
       const { mimeType, data } = await relay.getAttachment(args.attachment_id);
