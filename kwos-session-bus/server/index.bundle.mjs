@@ -15763,6 +15763,76 @@ async function askRemote(question, options) {
   });
   return data ?? { status: "timeout" };
 }
+async function fetchMessagesSince(since) {
+  const { data } = await call(`/v1/sessions/${encodeURIComponent(config2.sessionId)}/messages?since=${since}`);
+  if (data === null || !Array.isArray(data?.messages)) {
+    throw new Error(
+      `get_message: die Antwort des Relays war kein lesbares JSON -- vermutlich eine Fehlerseite/Proxy-Antwort, nicht ein leerer Verlauf.`
+    );
+  }
+  return data.messages;
+}
+async function getMessage(seq) {
+  if (!Number.isInteger(seq) || seq < 1) {
+    throw new Error(`get_message: seq muss eine positive Ganzzahl sein (erhalten: ${JSON.stringify(seq)}).`);
+  }
+  const messages = await fetchMessagesSince(seq - 1);
+  const target = (
+    /** @type {RelayMessage|undefined} */
+    messages.find((m) => m.seq === seq)
+  );
+  if (!target) {
+    throw new Error(
+      `get_message: keine Nachricht mit seq=${seq} im eigenen Verlauf gefunden -- entweder aus dem Verlauf rotiert oder eine seq, die nicht an diese Session ging.`
+    );
+  }
+  const marker = parseChunkMarker(target.text);
+  if (marker && marker.index > 1) {
+    const startSeq = seq - (marker.index - 1);
+    if (startSeq >= 1) {
+      const earlier = await fetchMessagesSince(startSeq - 1);
+      const head = earlier.find((m) => m.seq === startSeq);
+      if (head) return assembleSplitRun(head, earlier);
+    }
+  }
+  return assembleSplitRun(target, messages);
+}
+function parseChunkMarker(text) {
+  const m = typeof text === "string" ? /^\((\d+)\/(\d+)\) ?/.exec(text) : null;
+  if (!m) return null;
+  const index = Number(m[1]);
+  const total = Number(m[2]);
+  if (!Number.isInteger(index) || !Number.isInteger(total) || total < 2 || index < 1 || index > total) return null;
+  return { index, total, body: text.slice(m[0].length) };
+}
+function assembleSplitRun(target, messages) {
+  const first = parseChunkMarker(target.text);
+  if (!first) return { ...target, chunks: 1, incomplete: false, missingSeqs: [], missingHead: false };
+  const bySeq = new Map(messages.map((m) => [m.seq, m]));
+  const startSeq = target.seq - (first.index - 1);
+  const bodies = [];
+  const missingSeqs = [];
+  let missingHead = startSeq < 1;
+  for (let i = 1; i <= first.total; i++) {
+    const at = startSeq + (i - 1);
+    const row = i === first.index ? target : bySeq.get(at);
+    const parsed = row ? i === first.index ? first : parseChunkMarker(row.text) : null;
+    if (!parsed || parsed.index !== i || parsed.total !== first.total || row.from_session !== target.from_session) {
+      if (at >= 1) missingSeqs.push(at);
+      else missingHead = true;
+      continue;
+    }
+    bodies.push(parsed.body);
+  }
+  return {
+    ...target,
+    text: bodies.join(" "),
+    chunks: first.total,
+    incomplete: missingSeqs.length > 0 || missingHead,
+    missingSeqs,
+    missingHead
+  };
+}
 async function getAttachment(id) {
   if (!config2.relayUrl) {
     throw new Error("KWOS_RELAY_URL ist nicht gesetzt.");
@@ -15852,6 +15922,18 @@ var TOOLS = [
     }
   },
   {
+    name: "get_message",
+    description: "Holt den vollst\xE4ndigen Text einer eingegangenen Session-Bus-Nachricht nach. Claude Code kappt Monitor-Zeilen bei 500 Zeichen, deshalb k\xFCrzt der Monitor lange Nachrichten selbst und schreibt stattdessen einen Marker '[+N Zeichen -- get_message(seq=S)]' in die Notification. Mit diesem seq hier den vollen Text abrufen. Achtung: der Relay teilt sehr lange Nachrichten schon vor dem Speichern in nummerierte Teile '(i/n)' mit je eigener seq -- die Teile werden hier automatisch wieder zusammengesetzt; ist die Folge unvollst\xE4ndig, sagt die Antwort das ausdr\xFCcklich. Nur aufrufen, wenn die Nachricht tats\xE4chlich vollst\xE4ndig gebraucht wird.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        seq: { type: "integer", description: "seq aus dem Marker der Notification" }
+      },
+      required: ["seq"],
+      additionalProperties: false
+    }
+  },
+  {
     name: "get_attachment",
     description: "L\xF6st eine attachment_id (steckt im Notification-Hinweis einer eingegangenen Nachricht, wenn ein Bild angeh\xE4ngt ist) in einen echten Bild-Content-Block auf -- NICHT als Base64-Text, ein Sprachmodell sieht rohen Base64 nicht als Bild. Nur aufrufen, wenn die Session sich entscheidet, ein angek\xFCndigtes Bild tats\xE4chlich anzusehen.",
     inputSchema: {
@@ -15865,7 +15947,7 @@ var TOOLS = [
   }
 ];
 var server = new Server(
-  { name: "kwos-session-bus", version: "0.3.4" },
+  { name: "kwos-session-bus", version: "0.3.5" },
   { capabilities: { tools: {} } }
 );
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
@@ -15897,6 +15979,17 @@ async function handleToolCall(name, args = {}) {
       const result = await askRemote(question, options);
       const text = result.status === "answered" ? `Antwort erhalten: ${result.answer}` : "Keine Antwort erhalten (Zeitfenster abgelaufen). Bitte selbst sinnvoll entscheiden oder den Nutzer im Terminal direkt fragen.";
       return { content: [{ type: "text", text }] };
+    }
+    case "get_message": {
+      const msg = await getMessage(args.seq);
+      const hint = msg.attachment_id ? `
+[Bild angeh\xE4ngt, attachment_id=${msg.attachment_id} -- mit get_attachment abrufbar]` : "";
+      const warning = msg.incomplete ? `
+[UNVOLLST\xC4NDIG: diese Nachricht wurde vom Relay in ${msg.chunks} Teile geteilt; ` + [
+        msg.missingHead ? "die Kopfteile fehlen (nicht mehr abrufbar)" : null,
+        msg.missingSeqs.length ? `es fehlen die Teile mit seq=${msg.missingSeqs.join(", ")}` : null
+      ].filter(Boolean).join("; ") + ".]" : "";
+      return { content: [{ type: "text", text: `${msg.text ?? ""}${hint}${warning}` }] };
     }
     case "get_attachment": {
       const { mimeType, data } = await getAttachment(args.attachment_id);
