@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { config, ensureSessionId } from "./config.js";
+import { config, ensureSessionId, refreshSessionId } from "./config.js";
 import { log } from "./log.js";
 import * as relay from "./relay-client.js";
 
@@ -227,6 +227,30 @@ async function main() {
     relay.heartbeat().catch((err) => log.error("Heartbeat fehlgeschlagen.", { error: String(err) }));
   }, config.heartbeatIntervalMs);
   heartbeatTimer.unref();
+
+  // `/clear` and `--resume` hand out a NEW session id inside this process. Everything above stays
+  // frozen on the id resolved at start: the registry row, the heartbeat, the `from` of every
+  // send_message and the session_id of ask_remote. The SessionStart hook rewrites our marker, so
+  // the marker is where the truth moves -- adopt it and re-register under the new id.
+  //
+  // Not unref'd on purpose: this timer is a real handle for the life of the process, so the
+  // re-bind cannot be dropped while the stdio transport is idle. It ends with the session.
+  setInterval(async () => {
+    let changed = false;
+    try {
+      changed = await refreshSessionId();
+    } catch (err) {
+      log.error("Session-ID konnte nicht neu gelesen werden.", { error: String(err) });
+      return;
+    }
+    if (!changed) return;
+    try {
+      await relay.register();
+      log.info("Nach Session-Wechsel neu registriert.", { sessionId: config.sessionId });
+    } catch (err) {
+      log.error("Registrierung nach Session-Wechsel fehlgeschlagen.", { error: String(err) });
+    }
+  }, config.sessionIdCheckMs);
 
   // SSE-Empfang läuft nicht mehr hier, sondern als separater Background-Monitor
   // (monitors/monitors.json -> server/listen.js) — siehe Workitem-9831620-Kommentar
