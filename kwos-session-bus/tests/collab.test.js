@@ -257,3 +257,30 @@ test("der Monitor-Timer haelt den Prozess nicht am Leben (Review-Fund Kai, 2026-
   assert.match(src, /watch\.unref\(\)/, "der Nachlauf-Timer (refreshSessionId) muss unref't sein");
   assert.match(src, /pollTimer\.unref\(\)/, "der Abfragetakt muss unref't sein");
 });
+
+test("nach einem Session-Wechsel nimmt der Monitor seine Kanaele neu an", async () => {
+  // `/clear` und `--resume` geben eine neue Session-ID aus; die Mitgliedszeile im Relay nennt aber
+  // die ALTE, und `myJoinedCollabs` filtert genau darauf -- ohne neues accept ist der Kanal fuer den
+  // Client weg (jedes Werkzeug verweigert, der Monitor laesst seine Stroeme fallen). Review-Fund
+  // Kai 2026-10-16; die Relay-Haelfte (das zweite accept BEWEGT die Zeile) liegt im LiteLLM-Repo.
+  //
+  // Als QUELLTEXT-Pruefung, wie die Timer-Zusicherung darueber: der Nachlauf ist nur mit einem
+  // echten Marker-Wechsel und einem Relay zu beobachten. Geprueft wird die REIHENFOLGE, denn genau
+  // daran haengt die Wirkung -- `closeAll()` leert die Liste, aus der die IDs kommen.
+  const { readFile } = await import("node:fs/promises");
+  const src = await readFile(new URL("../server/collab-listen.js", import.meta.url), "utf8");
+  const start = src.indexOf("if (!changed) return;");
+  assert.ok(start > 0, "der Nachlauf-Zweig ist nicht mehr auffindbar -- dann prueft dieser Fall nichts");
+  const tail = src.slice(start, src.indexOf("}, config.sessionIdCheckMs)"));
+  const capture = tail.indexOf("const was = [...open.keys()]");
+  const close = tail.indexOf("closeAll()");
+  const accept = tail.indexOf("collab.acceptCollab(id)");
+  assert.ok(capture > 0 && close > capture, "die Kanal-IDs muessen VOR closeAll() gemerkt werden");
+  assert.ok(accept > close, "das erneute accept gehoert hinter closeAll()");
+  // Und nur die eigenen Kanaele: niemals "alles, wo mein Login drin ist" (ein zweites Fenster kann
+  // im selben Kanal sein -- ein accept von hier zoege ihm die Mitgliedschaft weg).
+  assert.match(tail, /for \(const id of was\)/, "erneut angenommen wird nur, was dieser Monitor offen hatte");
+  // Kein Sammel-accept: der Aufruf (nicht das Wort -- der Kommentar nennt die Funktion) darf hier
+  // nicht stehen.
+  assert.ok(!/collab\.myJoinedCollabs\(/.test(tail), "kein Sammel-accept ueber alle Kanaele des Logins");
+});

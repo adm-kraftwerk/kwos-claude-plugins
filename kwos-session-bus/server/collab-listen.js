@@ -160,7 +160,27 @@ async function main() {
       log.error("Session-ID konnte nicht neu gelesen werden.", { error: String(err) });
     }
     if (!changed) return;
+    // The streams belonged to the OLD id -- and so does the member row on the relay: after /clear
+    // this session is joined to NOTHING until it says so again (`myJoinedCollabs` filters on the
+    // member row's session id, s. collab.js). That is exactly what the relay's repeat accept is for:
+    // it MOVES the row to the new id instead of answering "already joined" (review finding Kai,
+    // 2026-10-16). Without this call the channel was gone for the client after every /clear -- the
+    // tools refused and this monitor let its streams go.
+    //
+    // Only the channels this monitor was ACTUALLY in are re-accepted, never "everything my login is
+    // joined to": a second window may be in the same channel, and an accept from here would move the
+    // membership away from it.
+    const was = [...open.keys()];
     closeAll();
+    for (const id of was) {
+      try {
+        await collab.acceptCollab(id);
+      } catch (err) {
+        // Not fatal (the next poll simply finds no channel), but LOUD: this is the one failure a
+        // person cannot see for themselves -- the channel just looks empty.
+        log.error("Kanal nach dem Session-Wechsel nicht neu angenommen.", { collabId: id, error: String(err) });
+      }
+    }
     await poll();
   }, config.sessionIdCheckMs);
   watch.unref();
