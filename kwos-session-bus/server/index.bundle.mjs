@@ -15499,6 +15499,16 @@ var log = {
   error: (message, extra) => write("error", message, extra)
 };
 
+// server/sessionMarker.js
+var MARKER_DIR = ".kwos-session-bus";
+var LEGACY_MARKER_FILE = ".kwos-session-bus-id";
+var CLIENT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+function clientMarkerName(raw) {
+  const id = typeof raw === "string" ? raw.trim() : "";
+  if (!CLIENT_ID_RE.test(id)) return null;
+  return id.replace(/:/g, "_");
+}
+
 // server/config.js
 var DEFAULT_RELAY_URL = "https://llm.os.kraftwerk.io";
 var RELAY_URL = process.env.KWOS_RELAY_URL || DEFAULT_RELAY_URL;
@@ -15510,15 +15520,14 @@ var DEFAULT_TOKEN_HELPER_PATH = join(
 );
 var TOKEN_HELPER_PATH = process.env.KWOS_XID_TOKEN_HELPER_PATH || DEFAULT_TOKEN_HELPER_PATH;
 var TOKEN_OVERRIDE = process.env.KWOS_XID_ACCESS_TOKEN;
-var SESSION_ID_FILE = ".kwos-session-bus-id";
-function findSessionIdFile(startDir) {
+function findMarker(startDir, relativeFile) {
   let dir = startDir;
   for (; ; ) {
-    const candidate = join(dir, SESSION_ID_FILE);
+    const candidate = join(dir, relativeFile);
     if (existsSync(candidate)) {
       try {
         const id = readFileSync(candidate, "utf8").trim();
-        if (id) return id;
+        if (id) return { path: candidate, id };
       } catch {
       }
     }
@@ -15527,6 +15536,8 @@ function findSessionIdFile(startDir) {
     dir = parent;
   }
 }
+var OWN_MARKER_NAME = clientMarkerName(process.env.KWOS_CLIENT_ID);
+var ownMarker = () => OWN_MARKER_NAME ? findMarker(process.cwd(), join(MARKER_DIR, OWN_MARKER_NAME)) : null;
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function deriveDisplayName(cwd) {
   if (typeof cwd !== "string" || !cwd.trim()) return "Claude Code Session";
@@ -15548,16 +15559,21 @@ function deriveChannels(cwd) {
   return [.../* @__PURE__ */ new Set([deriveDisplayName(cwd), ...extra])];
 }
 async function resolveSessionId() {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const own = ownMarker();
+    if (own) return own.id;
+    await sleep(500);
+  }
   const fromEnv = process.env.CLAUDE_CODE_SESSION_ID;
   if (fromEnv) return fromEnv;
   for (let attempt = 0; attempt < 10; attempt++) {
-    const fromFile = findSessionIdFile(process.cwd());
-    if (fromFile) return fromFile;
+    const legacy = findMarker(process.cwd(), LEGACY_MARKER_FILE);
+    if (legacy) return legacy.id;
     await sleep(500);
   }
   const generated = randomUUID();
   log.error(
-    `Keine echte session_id gefunden (weder CLAUDE_CODE_SESSION_ID noch ${SESSION_ID_FILE}) \u2014 verwende lokal generierte Session-ID (${generated}). Relay-Attribution passt dadurch nicht zusammen.`
+    `Keine echte session_id gefunden (weder ${join(MARKER_DIR, OWN_MARKER_NAME || "<client-id>")}, CLAUDE_CODE_SESSION_ID noch ${LEGACY_MARKER_FILE}) \u2014 verwende lokal generierte Session-ID (${generated}). Relay-Attribution passt dadurch nicht zusammen.`
   );
   return generated;
 }
@@ -15570,11 +15586,27 @@ var config2 = {
   channels: deriveChannels(process.cwd()),
   heartbeatIntervalMs: 5 * 60 * 1e3,
   // Vorschlag Server-Spec §3.1: alle 5 Min
+  // How often a long-running process re-reads its own marker. The file is a few bytes and the check
+  // is one stat+read; 5s costs nothing and bounds how long a /clear can go unnoticed. Same interval
+  // as CLAUDE_CODE_SESSION_ID_CHECK_MS in the launchers' world: the latency the reader feels.
+  sessionIdCheckMs: readCheckInterval(process.env.KWOS_SESSION_ID_CHECK_MS),
   ttlMinutes: 30
 };
+function readCheckInterval(raw) {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 250 ? n : 5e3;
+}
 async function ensureSessionId() {
   if (!config2.sessionId) config2.sessionId = await resolveSessionId();
   return config2.sessionId;
+}
+async function refreshSessionId() {
+  const own = ownMarker();
+  if (!own || own.id === config2.sessionId) return false;
+  const previous = config2.sessionId;
+  config2.sessionId = own.id;
+  log.info("Session-ID gewechselt (/clear oder --resume) \u2014 binde neu.", { previous, sessionId: own.id });
+  return true;
 }
 
 // server/auth.js
@@ -16022,6 +16054,23 @@ async function main() {
     heartbeat().catch((err) => log.error("Heartbeat fehlgeschlagen.", { error: String(err) }));
   }, config2.heartbeatIntervalMs);
   heartbeatTimer.unref();
+  const rebindTimer = setInterval(async () => {
+    let changed = false;
+    try {
+      changed = await refreshSessionId();
+    } catch (err) {
+      log.error("Session-ID konnte nicht neu gelesen werden.", { error: String(err) });
+      return;
+    }
+    if (!changed) return;
+    try {
+      await register();
+      log.info("Nach Session-Wechsel neu registriert.", { sessionId: config2.sessionId });
+    } catch (err) {
+      log.error("Registrierung nach Session-Wechsel fehlgeschlagen.", { error: String(err) });
+    }
+  }, config2.sessionIdCheckMs);
+  rebindTimer.unref();
 }
 var isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {

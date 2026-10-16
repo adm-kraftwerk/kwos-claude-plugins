@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { config, ensureSessionId } from "./config.js";
+import { config, ensureSessionId, refreshSessionId } from "./config.js";
 import { log } from "./log.js";
 import * as relay from "./relay-client.js";
 
@@ -227,6 +227,34 @@ async function main() {
     relay.heartbeat().catch((err) => log.error("Heartbeat fehlgeschlagen.", { error: String(err) }));
   }, config.heartbeatIntervalMs);
   heartbeatTimer.unref();
+
+  // `/clear` and `--resume` hand out a NEW session id inside this process. Everything above stays
+  // frozen on the id resolved at start: the registry row, the heartbeat, the `from` of every
+  // send_message and the session_id of ask_remote. The SessionStart hook rewrites our marker, so
+  // the marker is where the truth moves -- adopt it and re-register under the new id.
+  //
+  // Unref'd like the heartbeat above, and for the same reason: this process ends with its client.
+  // An open stdin is what holds it up while the session lives -- the timer only has to fire.
+  // Measured 2026-10-16: with this timer ref'd, the server outlived the closed stdin (the old
+  // bundle exited 47 ms after stdin close, this one was still alive 10 s later), and an orphan
+  // keeps its heartbeat firing, so the session never ages out of the PWA list.
+  const rebindTimer = setInterval(async () => {
+    let changed = false;
+    try {
+      changed = await refreshSessionId();
+    } catch (err) {
+      log.error("Session-ID konnte nicht neu gelesen werden.", { error: String(err) });
+      return;
+    }
+    if (!changed) return;
+    try {
+      await relay.register();
+      log.info("Nach Session-Wechsel neu registriert.", { sessionId: config.sessionId });
+    } catch (err) {
+      log.error("Registrierung nach Session-Wechsel fehlgeschlagen.", { error: String(err) });
+    }
+  }, config.sessionIdCheckMs);
+  rebindTimer.unref();
 
   // SSE-Empfang läuft nicht mehr hier, sondern als separater Background-Monitor
   // (monitors/monitors.json -> server/listen.js) — siehe Workitem-9831620-Kommentar

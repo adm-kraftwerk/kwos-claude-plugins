@@ -18,7 +18,7 @@
 // (Reaction Policy §2.3: wie User-Input behandeln, nicht blind ausführen).
 
 import { fileURLToPath } from "node:url";
-import { ensureSessionId } from "./config.js";
+import { config, ensureSessionId, refreshSessionId } from "./config.js";
 import { log } from "./log.js";
 import * as relay from "./relay-client.js";
 import { runSseReceiver } from "./sse-receiver.js";
@@ -186,22 +186,67 @@ async function main() {
   // verlassen (register ist idempotent) — vermeidet eine Race zwischen den beiden
   // unabhängig gestarteten Prozessen (MCP-Server per stdio, dieser Monitor per `monitors`).
   await ensureSessionId();
+  await registerOrLog();
+
+  let controller = new AbortController();
+  let stopping = false;
+  let signalEnded;
+  const ended = new Promise((resolve) => { signalEnded = resolve; });
+  const stop = () => { stopping = true; controller.abort(); signalEnded(); };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+
+  const writeLine = createLineWriter(process.stdout);
+
+  // `/clear` and `--resume` give this Claude Code process a NEW session id while this monitor keeps
+  // running. The SessionStart hook rewrites our marker; nothing else would ever tell us, and a
+  // stream left open under the old id is deaf to every message the PWA sends to the session it
+  // shows (it queues in relay.messages instead). So: re-read the marker, and on a change drop the
+  // stream, re-register and reconnect under the new id.
+  //
+  // Deliberately NOT unref'd: it is also what keeps this process alive across the gap between
+  // aborting one stream and opening the next. An unref'd timer would let the process exit in
+  // exactly that moment, and a monitor that quietly disappears is worse than one that never ran.
+  const watch = setInterval(async () => {
+    if (stopping) return;
+    let changed = false;
+    try {
+      changed = await refreshSessionId();
+    } catch (err) {
+      log.error("Session-ID konnte nicht neu gelesen werden.", { error: String(err) });
+    }
+    if (!changed) return;
+    controller.abort();
+    controller = new AbortController();
+    await registerOrLog();
+    receive(controller, writeLine);
+  }, config.sessionIdCheckMs);
+
+  function receive(ctrl, writeLine) {
+    runSseReceiver(forwardToWriter(writeLine), { signal: ctrl.signal }).catch((err) => {
+      // Only reachable for a failure the receiver itself does not swallow; its own reconnect loop
+      // handles a dead stream. Worth a line, not a crash.
+      if (!ctrl.signal.aborted) log.error("SSE-Empfang beendet.", { error: String(err) });
+    });
+  }
+
+  try {
+    receive(controller, writeLine);
+    // A monitor ends when its session ends, not when one stream ends -- a dropped stream is the
+    // receiver's own business (it reconnects on its own). So wait for the signal, not the stream.
+    await ended;
+  } finally {
+    clearInterval(watch);
+    // Beim Session-Ende noch gepufferte Zeilen ausliefern, statt sie mit dem Prozess zu verlieren.
+    await writeLine.flush();
+  }
+}
+
+async function registerOrLog() {
   try {
     await relay.register();
   } catch (err) {
     log.error("Registrierung (Listener) fehlgeschlagen.", { error: String(err) });
-  }
-
-  const controller = new AbortController();
-  process.on("SIGINT", () => controller.abort());
-  process.on("SIGTERM", () => controller.abort());
-
-  const writeLine = createLineWriter(process.stdout);
-  try {
-    await runSseReceiver(forwardToWriter(writeLine), { signal: controller.signal });
-  } finally {
-    // Beim Session-Ende noch gepufferte Zeilen ausliefern, statt sie mit dem Prozess zu verlieren.
-    await writeLine.flush();
   }
 }
 

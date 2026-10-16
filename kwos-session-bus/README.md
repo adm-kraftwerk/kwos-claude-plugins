@@ -101,7 +101,8 @@ behandeln, nicht blind ausführen).
 | `KWOS_RELAY_URL` | nein | Override für die Relay-URL (Default: `https://llm.os.kraftwerk.io` — s. unten, warum ein Default und kein Pflichtfeld) |
 | `KWOS_XID_ACCESS_TOKEN` | nein | Override für das Bearer-Token (z. B. lokales Testen) |
 | `KWOS_XID_TOKEN_HELPER_PATH` | nein | Override für den Pfad zum `xiam-token.sh`/`.ps1`-Helper (Default: `~/.config/kraftwerk/xiam-token.{sh,ps1}`, siehe unten) |
-| `CLAUDE_CODE_SESSION_ID` | nein | Override für die Session-ID; normalerweise per SessionStart-Hook aus Marker-Datei gelöst (siehe unten) |
+| `CLAUDE_CODE_SESSION_ID` | nein | Session-ID beim Start. **Ist tatsächlich gesetzt** (gemessen 2026-10-14, s. unten), aber ab dem Prozessstart eingefroren — nach `/clear`/`--resume` gilt die Marker-Datei, nicht dieser Wert |
+| `KWOS_SESSION_ID_CHECK_MS` | nein | Wie oft ein laufender Prozess seine eigene Marker-Datei neu liest (Default 5000). Bestimmt, wie lange ein `/clear` unbemerkt bleiben darf |
 | `KWOS_SESSION_DISPLAY_NAME` | nein | Override für den Anzeigenamen (Default: Basename des Arbeitsverzeichnisses, siehe unten) |
 | `KWOS_CHANNELS` | nein | Kommagetrennte ZUSÄTZLICHE Channels (Pub/Sub, WI 10383787) — Default-Channel ist immer der Basename des Arbeitsverzeichnisses, unabhängig davon |
 
@@ -116,13 +117,36 @@ behandeln, nicht blind ausführen).
    interaktiven Login. Fehlt der Helper (kein `kwclaude`-Setup auf der Maschine) oder ist kein
    Refresh-Token gecacht, scheitert die Registrierung mit klarer Fehlermeldung statt eines
    stillen/hängenden Zustands.
-2. **Claude-Code-Session-ID — gelöst:** weder der stdio-MCP-Server noch ein per `monitors`
-   gestarteter Prozess bekommt `CLAUDE_CODE_SESSION_ID` in der Umgebung. Ein `SessionStart`-Hook
-   (`hooks/write-session-id.js`) schreibt die echte `session_id` in eine Marker-Datei
-   `.kwos-session-bus-id` im Projektverzeichnis; `server/config.js` sucht sie beim Start
-   aufwärts durchs Verzeichnis, mit kurzem Polling (Hook und Prozess starten unabhängig
-   voneinander). `CLAUDE_CODE_SESSION_ID` aus der Umgebung bleibt als Override erhalten,
-   lokal generierte UUID nur noch als letzter Fallback (mit lautem Log-Warning).
+2. **Claude-Code-Session-ID — korrigiert 2026-10-14, gemessen.** Hier stand, weder der
+   stdio-MCP-Server noch ein per `monitors` gestarteter Prozess bekomme
+   `CLAUDE_CODE_SESSION_ID` in der Umgebung. **Das ist falsch:** der Wert stand in der Umgebung
+   eines shell-gestarteten `node`-Prozesses, neben den `KWOS_*`-Exporten des Launchers. Warum die
+   Marker-Datei trotzdem bleibt: der Env-Wert ist **ab dem Prozessstart eingefroren**. Nach
+   `/clear` und `--resume` vergibt Claude Code **innerhalb desselben Prozesses** eine neue
+   Session-ID — die Relay-Hooks (die sie je Event sehen) registrieren die Sitzung unter der neuen,
+   der längst laufende Listener abonniert weiter die alte. Jede vom Handy gesendete Nachricht geht
+   dann ins Leere: sie bleibt in `relay.messages` als „eingereiht“ liegen, und nirgends steht ein
+   Fehler (Befund Steffen 2026-10-14, „wenn man wirklich mal was will, sendet es nicht zur
+   Sitzung“).
+
+   Deshalb ist die Marker-Datei die **aktuelle** Wahrheit und der Env-Wert nur der Startpunkt:
+   - Der `SessionStart`-Hook (`hooks/write-session-id.js`) schreibt sie bei **jedem** Start neu,
+     auch bei `clear` und `resume`.
+   - Der Dateiname ist der **Client** (`KWOS_CLIENT_ID`, vom Launcher exportiert, eine je
+     gestartetem `claude`-Prozess, überlebt `/clear` und `--resume`) — **nicht** das Verzeichnis.
+     Eine Datei je Projektverzeichnis ist letzter-Schreiber-gewinnt: zwei Sitzungen im selben
+     Verzeichnis teilen sie, und die andere Sitzung abonniert dann unter einer fremden ID. Die
+     alte `.kwos-session-bus-id` wird weiter geschrieben, für Leser, die älter sind als diese
+     Änderung.
+   - `server/config.js` löst in dieser Reihenfolge auf: eigene Marker-Datei (kurzes Polling, Hook
+     und Prozess starten unabhängig) → eingefrorener Env-Wert → alte Datei je Verzeichnis → lokal
+     generierte UUID (mit lautem Log-Warning).
+   - `refreshSessionId()` liest die eigene Datei im Betrieb neu (`KWOS_SESSION_ID_CHECK_MS`) und
+     bindet bei Änderung neu: der MCP-Server registriert sich neu, der Monitor verwirft seinen
+     SSE-Strom und verbindet unter der neuen ID. Unit-getestet in `tests/config.test.js` (echter
+     Kindprozess mit echter Datei).
+   - **Nicht abgedeckt:** Nachrichten, die in der Zwischenzeit an die ALTE ID gingen, holt niemand
+     nach. Ein Abfluss des alten Backlogs beim Wechsel wäre ein eigener Schritt.
 3. **`monitors`-Verfügbarkeit/Trust-Level:** Background-Monitore laufen laut Doku nur in
    interaktiven CLI-Sessions, unsandboxed auf demselben Trust-Level wie Hooks, und werden auf
    Hosts ohne Monitor-Tool-Unterstützung übersprungen (dann bleibt nur `list_sessions`/
