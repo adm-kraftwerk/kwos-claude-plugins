@@ -22,7 +22,9 @@ import { getAccessToken } from "./auth.js";
  * @property {string} [workitem_ref]
  */
 
-async function call(path, { method = "GET", body, headers } = {}) {
+// Exported for the kwcollab calls (server/collab.js): ONE place builds the URL, the bearer and the
+// error text. A second fetch helper next door would be a second place that can forget the token.
+export async function call(path, { method = "GET", body, headers } = {}) {
   if (!config.relayUrl) {
     throw new Error("KWOS_RELAY_URL ist nicht gesetzt.");
   }
@@ -39,7 +41,14 @@ async function call(path, { method = "GET", body, headers } = {}) {
 
   if (!res.ok && res.status !== 202) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Relay ${method} ${path} -> ${res.status}: ${text}`);
+    // A section-lease conflict carries the holder in the body, a denied invitation the reason --
+    // read them out here so every caller does not have to parse a message string.
+    let detail = text;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed?.error) detail = parsed.holder ? `${parsed.error} (gehalten von ${parsed.holder})` : parsed.error;
+    } catch { /* not JSON: keep the raw text */ }
+    throw new Error(`Relay ${method} ${path} -> ${res.status}: ${detail}`);
   }
 
   const queued = res.status === 202;

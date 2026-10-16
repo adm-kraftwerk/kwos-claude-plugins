@@ -16,14 +16,18 @@ const RECONNECT_MAX_MS = 30000;
  * sichtbar (MCP-Logging-Notification an den Client), es gibt kein Autowake einer
  * inaktiven Session — das ist bewusst außerhalb des MVP-Scopes.
  */
-export async function runSseReceiver(onMessage, { signal }) {
+// `url` defaults to the session stream (kwremote). The kwcollab monitor passes the channel's own
+// URL (GET /v1/collabs/:id/events) -- the frames, the Last-Event-ID handling and the reconnect are
+// the same, and a second receiver next door would be a second place that can get them wrong.
+export async function runSseReceiver(onMessage, { signal, url = null }) {
   let lastEventId;
   let delay = RECONNECT_MIN_MS;
+  const endpoint = url || eventsUrl();
 
   while (!signal.aborted) {
     try {
       const token = await getAccessToken();
-      const res = await fetch(eventsUrl(), {
+      const res = await fetch(endpoint, {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: "text/event-stream",

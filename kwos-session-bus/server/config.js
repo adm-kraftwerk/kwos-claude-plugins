@@ -162,6 +162,19 @@ export const config = {
   // as CLAUDE_CODE_SESSION_ID_CHECK_MS in the launchers' world: the latency the reader feels.
   sessionIdCheckMs: readCheckInterval(process.env.KWOS_SESSION_ID_CHECK_MS),
   ttlMinutes: 30,
+  /**
+   * The collab channel this session was STARTED INTO (WI 11482928), or null.
+   *
+   * Set by whoever starts the session -- today the interfaces that open a session from an
+   * invitation, which put `KWOS_COLLAB` into the child's environment. The session then joins that
+   * channel itself, because it is the only party that knows its own Claude Code session id (the
+   * relay's accept requires a session the caller owns). A launcher cannot do it: it does not know
+   * the id Claude Code will pick -- the same chicken-and-egg the approval token solves with its own
+   * marker.
+   */
+  collab: typeof process.env.KWOS_COLLAB === "string" && process.env.KWOS_COLLAB.trim()
+    ? process.env.KWOS_COLLAB.trim()
+    : null,
 };
 
 /**

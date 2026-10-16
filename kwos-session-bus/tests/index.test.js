@@ -181,3 +181,50 @@ test("handleToolCall('get_message') meldet eine unvollstaendige Teilfolge statt 
     mock.restore();
   }
 });
+
+// ── kwcollab-Werkzeuge (WI 11482928) ─────────────────────────────────────────────────────────
+
+test("TOOLS enthaelt die kwcollab-Werkzeuge -- und KEIN Einladen/Rauswerfen/Schliessen", () => {
+  const names = TOOLS.map((t) => t.name);
+  for (const t of [
+    "collab_status", "collab_send", "collab_accept", "collab_leases", "collab_lease",
+    "collab_release", "collab_get_attachment",
+  ]) {
+    assert.ok(names.includes(t), `${t} fehlt in TOOLS`);
+  }
+  // Einladen, Rauswerfen und Schliessen sind Handlungen eines MENSCHEN; als Werkzeug fuer den
+  // Agenten gibt es sie bewusst nicht (s. die Beschreibungen in index.js).
+  for (const verboten of ["collab_invite", "collab_kick", "collab_close", "collab_handover"]) {
+    assert.ok(!names.includes(verboten), `${verboten} darf es nicht geben`);
+  }
+});
+
+test("collab_accept ohne Ziel nennt den Grund, statt ins Leere zu greifen", async () => {
+  const before = config.collab;
+  config.collab = null;
+  try {
+    await assert.rejects(() => handleToolCall("collab_accept", {}), /Kein Kanal angegeben/);
+  } finally {
+    config.collab = before;
+  }
+});
+
+test("collab_accept schickt die EIGENE session_id an den Relay", async () => {
+  const mock = installFetchMock(() =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      json: async () => ({ me: { status: "joined" } }),
+    })
+  );
+  try {
+    const out = await handleToolCall("collab_accept", { collab_id: "7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c" });
+    assert.match(out.content[0].text, /beigetreten/);
+    const body = JSON.parse(mock.calls[0].init.body);
+    assert.equal(body.session_id, "sess-self", "nur DIESE Sitzung darf sich anmelden");
+    assert.match(mock.calls[0].url, /\/v1\/collabs\/7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c\/accept$/);
+  } finally {
+    mock.restore();
+  }
+});
