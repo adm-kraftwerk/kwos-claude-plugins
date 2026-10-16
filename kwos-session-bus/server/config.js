@@ -162,6 +162,19 @@ export const config = {
   // as CLAUDE_CODE_SESSION_ID_CHECK_MS in the launchers' world: the latency the reader feels.
   sessionIdCheckMs: readCheckInterval(process.env.KWOS_SESSION_ID_CHECK_MS),
   ttlMinutes: 30,
+  /**
+   * The collab channel this session was STARTED INTO (WI 11482928), or null.
+   *
+   * Set by whoever starts the session -- today the interfaces that open a session from an
+   * invitation, which put `KWOS_COLLAB` into the child's environment. The session then joins that
+   * channel itself, because it is the only party that knows its own Claude Code session id (the
+   * relay's accept requires a session the caller owns). A launcher cannot do it: it does not know
+   * the id Claude Code will pick -- the same chicken-and-egg the approval token solves with its own
+   * marker.
+   */
+  collab: typeof process.env.KWOS_COLLAB === "string" && process.env.KWOS_COLLAB.trim()
+    ? process.env.KWOS_COLLAB.trim()
+    : null,
 };
 
 /**
@@ -169,10 +182,13 @@ export const config = {
  * `setInterval(fn, NaN)` and `setInterval(fn, 0)` both fire every millisecond, and this check runs
  * as a stat+read in two processes per session. Anything below the floor is a busy loop, not a
  * polling interval, so it falls back to the default as well.
+ *
+ * `fallback` is the caller's own default (the kwcollab monitor polls every 15 s, not every 5 s) --
+ * one spelling of the rule, two intervals.
  */
-export function readCheckInterval(raw) {
+export function readCheckInterval(raw, fallback = 5000) {
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 250 ? n : 5000;
+  return Number.isFinite(n) && n >= 250 ? n : fallback;
 }
 
 /** Muss vor jeder Nutzung von config.sessionId aufgerufen werden (einmalig, memoisiert). */

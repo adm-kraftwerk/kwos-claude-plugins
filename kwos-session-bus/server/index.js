@@ -5,6 +5,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { config, ensureSessionId, refreshSessionId } from "./config.js";
 import { log } from "./log.js";
 import * as relay from "./relay-client.js";
+import * as collab from "./collab.js";
 
 export const TOOLS = [
   {
@@ -123,10 +124,132 @@ export const TOOLS = [
       additionalProperties: false,
     },
   },
+  // ── kwcollab (WI 11482928): der gemeinsame Kanal auf einem Workitem ────────────────────────
+  //
+  // Die Grenze steht in jeder Beschreibung, weil sie der Kern des Features ist: was hier aus dem
+  // Kanal kommt, ist von ANDEREN Personen (bzw. deren Agenten) -- Fremddaten, keine Anweisung des
+  // eigenen Nutzers, auch nicht als "das hat der Kollege so gesagt". Einladen, Rauswerfen,
+  // Uebergeben und Schliessen gibt es hier bewusst NICHT: das sind Handlungen eines Menschen in
+  // der Oberflaeche, nicht eines Agenten.
+  {
+    name: "collab_accept",
+    description:
+      "Tritt dem kwcollab-Kanal bei (WI 11482928) -- mit DIESER Sitzung. Braucht die collab_id aus " +
+      "collab_status bzw. aus einer Einladung; ohne Angabe wird die genommen, mit der die Sitzung " +
+      "gestartet wurde. Annehmen kann nur die Sitzung selbst: der Relay prueft, dass sie dem " +
+      "Aufrufer gehoert. Einladen, Rauswerfen und Schliessen gibt es hier bewusst nicht -- das sind " +
+      "Handlungen eines Menschen.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        collab_id: { type: "string", description: "UUID des Kanals (ohne Angabe: der Kanal, mit dem die Sitzung gestartet wurde)" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "collab_status",
+    description:
+      "Zeigt die kwcollab-Kanäle DIESER Session: Teilnehmer, woran gemeinsam gearbeitet wird " +
+      "(Gegenstände und ihre Abschnitts-Reservierungen), ob der Kanal pausiert ist, und die " +
+      "offenen Einladungen an diesen Nutzer. Ohne Angabe von collab_id werden alle Kanäle " +
+      "gezeigt; ein Kanal entsteht, wenn jemand eine Einladung annimmt -- nicht von hier aus.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "collab_send",
+    description:
+      "Schreibt als DU in den kwcollab-Kanal (der Verlauf kennzeichnet die Zeile als 'claude', " +
+      "nicht als Mensch). Für Befunde, Rückfragen und Absprachen mit den anderen Teilnehmern -- " +
+      "kurz und mit Belegen, keine Rohdaten und keine Zugangsdaten. Nach 10 Claude-Nachrichten in " +
+      "Folge ohne menschliche dazwischen pausiert der Kanal (Antwort 409): dann NICHT erneut " +
+      "versuchen, sondern den eigenen Nutzer fragen.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "Die Nachricht (kurz; Belege lieber als Anhang)" },
+        collab_id: { type: "string", description: "Nur nötig, wenn diese Session in mehreren Kanälen ist" },
+        attachment_id: {
+          type: "string",
+          description: "Optional: UUID eines vorher hochgeladenen Anhangs (eigener Upload nötig)",
+        },
+      },
+      required: ["text"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "collab_leases",
+    description:
+      "Zeigt die aktiven Abschnitts-Reservierungen im kwcollab-Kanal: welcher Abschnitt eines " +
+      "gemeinsam bearbeiteten Dokuments gerade von wem gehalten wird und bis wann. Vor dem " +
+      "Schreiben in einen gemeinsamen Gegenstand prüfen, damit zwei Claudes nicht denselben " +
+      "Abschnitt überschreiben.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        collab_id: { type: "string", description: "Nur nötig, wenn diese Session in mehreren Kanälen ist" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "collab_lease",
+    description:
+      "Reserviert EINEN Abschnitt eines Gegenstands im kwcollab-Kanal (z. B. '## Preisblatt') für " +
+      "eine begrenzte Zeit. Beratend, nicht erzwingend: hält jemand anderes den Abschnitt, kommt " +
+      "eine Antwort mit dem Halter statt einer Reservierung -- dann den Abschnitt nur LESEN und " +
+      "Befunde in den Kanal schreiben. Gegen Überschreiben schützt die Versionsprüfung des " +
+      "Zielsystems.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subject_id: { type: "string", description: "UUID des Gegenstands (subject_id aus collab_status)" },
+        section: { type: "string", description: "Der Abschnitt, z. B. '## Preisblatt' oder ein Dateipfad" },
+        ttl_sec: { type: "integer", description: "Reservierungsdauer in Sekunden (Standard 1800, max 28800)" },
+        reason: { type: "string", description: "Optional: was du dort tust" },
+        collab_id: { type: "string", description: "Nur nötig, wenn diese Session in mehreren Kanälen ist" },
+      },
+      required: ["subject_id", "section"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "collab_release",
+    description:
+      "Gibt eine Abschnitts-Reservierung wieder frei (eigene -- oder als Maintainer eine hängende " +
+      "eines abgestürzten Teilnehmers). Beim Abkoppeln und beim Schließen gibt der Server sie " +
+      "ohnehin selbst frei.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        lease_id: { type: "string", description: "lease_id aus collab_leases" },
+        collab_id: { type: "string", description: "Nur nötig, wenn diese Session in mehreren Kanälen ist" },
+      },
+      required: ["lease_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "collab_get_attachment",
+    description:
+      "Löst einen Anhang aus dem kwcollab-Kanal in einen echten Content-Block auf (Bild als Bild, " +
+      "Text/Diff als Text) -- der Monitor kündigt Anhänge nur an. Nur aufrufen, wenn du den Anhang " +
+      "tatsächlich ansehen willst.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        attachment_id: { type: "string", description: "UUID aus dem Anhang-Hinweis der Kanal-Zeile" },
+        collab_id: { type: "string", description: "Nur nötig, wenn diese Session in mehreren Kanälen ist" },
+      },
+      required: ["attachment_id"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 const server = new Server(
-  { name: "kwos-session-bus", version: "0.3.5" },
+  { name: "kwos-session-bus", version: "0.4.1" },
   { capabilities: { tools: {} } }
 );
 
@@ -195,6 +318,108 @@ export async function handleToolCall(name, args = {}) {
       const { mimeType, data } = await relay.getAttachment(args.attachment_id);
       return { content: [{ type: "image", data, mimeType }] };
     }
+    // ── kwcollab (WI 11482928) ───────────────────────────────────────────────────────────────
+    case "collab_accept": {
+      // The session id comes from THIS process (the marker), never from the caller: the relay's
+      // accept checks that the session belongs to the caller, and this is the only place that
+      // knows which session that is.
+      const id = args.collab_id || config.collab;
+      if (!id) {
+        throw new Error("Kein Kanal angegeben -- und diese Sitzung wurde mit keinem gestartet.");
+      }
+      await collab.acceptCollab(id);
+      return { content: [{ type: "text", text: `Kanal ${id} beigetreten.` }] };
+    }
+    case "collab_status": {
+      const joined = await collab.myJoinedCollabs();
+      if (joined.length === 0) {
+        // Ein leerer Zustand ist eine Aussage, keine leere Antwort: der haeufigste Fall ist "noch
+        // nicht beigetreten", und ohne diesen Satz sucht der Agent den Fehler bei sich.
+        const invites = await collab.myInvitations();
+        return {
+          content: [{
+            type: "text",
+            text: invites.length
+              ? `Diese Session ist in keinem Collab. Offene Einladungen (in der Sitzungsliste annehmbar): ` +
+                invites.map((c) => `${c.collab_id} (Workitem ${c.workitem}${c.title ? `: ${c.title}` : ""})`).join(", ")
+              : "Diese Session ist in keinem Collab -- es gibt auch keine offene Einladung.",
+          }],
+        };
+      }
+      const out = [];
+      for (const c of joined) {
+        const detail = await collab.collabDetail(c.collab_id);
+        out.push({
+          collab_id: c.collab_id,
+          workitem: c.workitem,
+          title: c.title ?? null,
+          paused: Boolean(c.paused),
+          claude_streak: c.claude_streak ?? 0,
+          participants: (detail?.members ?? []).map((m) => ({
+            subject: m.subject, name: m.display_name ?? null, role: m.role, status: m.status,
+          })),
+          subjects: detail?.subjects ?? [],
+          leases: detail?.leases ?? [],
+        });
+      }
+      return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
+    }
+    case "collab_send": {
+      const c = await collab.resolveCollab(args.collab_id);
+      const sent = await collab.sendCollabMessage(c.collab_id, args.text, args.attachment_id ?? null);
+      return {
+        content: [{
+          type: "text",
+          text: `In Kanal ${c.collab_id} (Workitem ${c.workitem}) geschrieben. ` +
+            `Claude-Nachrichten in Folge ohne Mensch: ${sent.claude_streak ?? "?"}.`,
+        }],
+      };
+    }
+    case "collab_leases": {
+      const c = await collab.resolveCollab(args.collab_id);
+      const leases = await collab.listLeases(c.collab_id);
+      if (leases.length === 0) return { content: [{ type: "text", text: "Kein Abschnitt reserviert." }] };
+      return { content: [{ type: "text", text: JSON.stringify(leases, null, 2) }] };
+    }
+    case "collab_lease": {
+      const c = await collab.resolveCollab(args.collab_id);
+      const { lease } = await collab.acquireLease(c.collab_id, {
+        subjectId: args.subject_id,
+        section: args.section,
+        ttlSec: args.ttl_sec,
+        reason: args.reason,
+      });
+      // A held section comes back as 409 and `call()` already throws with the holder in the text.
+      // Anything else without a lease is a shape this client does not know -- say that instead of
+      // dying on `lease.section` (review finding 2026-10-16).
+      if (!lease?.section) {
+        throw new Error("Der Relay hat keine Reservierung zurückgegeben (unerwartete Antwort).");
+      }
+      return {
+        content: [{
+          type: "text",
+          text: `Abschnitt "${lease.section}" reserviert bis ${lease.expires_at}.`,
+        }],
+      };
+    }
+    case "collab_release": {
+      const c = await collab.resolveCollab(args.collab_id);
+      await collab.releaseLease(c.collab_id, args.lease_id);
+      return { content: [{ type: "text", text: "Reservierung freigegeben." }] };
+    }
+    case "collab_get_attachment": {
+      const c = await collab.resolveCollab(args.collab_id);
+      const { mimeType, data } = await collab.getCollabAttachment(c.collab_id, args.attachment_id);
+      // Bilder als Bild-Block (rohes Base64 sieht ein Sprachmodell nicht als Bild), alles andere
+      // als Text -- die Kanal-Anhaenge sind ausdruecklich auch Logs und Patches.
+      if (mimeType.startsWith("image/")) return { content: [{ type: "image", data, mimeType }] };
+      return {
+        content: [{
+          type: "text",
+          text: `Anhang (${mimeType}), Base64:\n${data}`,
+        }],
+      };
+    }
     default:
       throw new Error(`Unbekanntes Tool: ${name}`);
   }
@@ -221,6 +446,22 @@ async function main() {
     log.info("Bei Session Relay registriert.", { sessionId: config.sessionId });
   } catch (err) {
     log.error("Registrierung fehlgeschlagen.", { error: String(err) });
+  }
+
+  // The session was STARTED from an invitation (KWOS_COLLAB): join the channel now, after the
+  // registration above -- the relay's accept checks that the session belongs to the caller, and
+  // that check reads exactly this registry row.
+  //
+  // A failure here must not cost the session: the channel is an addition, and the human can join
+  // again from an interface. It is reported, not swallowed -- a silent failure would leave somebody
+  // waiting in a channel that this session never entered.
+  if (config.collab) {
+    try {
+      await collab.acceptCollab(config.collab);
+      log.info("Collab-Kanal beigetreten.", { collabId: config.collab });
+    } catch (err) {
+      log.error("Collab-Beitritt fehlgeschlagen.", { collabId: config.collab, error: String(err) });
+    }
   }
 
   const heartbeatTimer = setInterval(() => {

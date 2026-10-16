@@ -9,8 +9,19 @@ Erweitert um Channel-Pub/Sub (Workitem-10383787) und Remote-Rückfragen (Workite
 Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-Session:
 
 - **MCP-Server** (`.mcp.json` → `server/index.js`, stdio): Tools `list_sessions`,
-  `send_message`, `broadcast`, `notify_dependents`, `ask_remote`, `get_message`, `get_attachment`.
+  `send_message`, `broadcast`, `notify_dependents`, `ask_remote`, `get_message`, `get_attachment`,
+  dazu die kwcollab-Tools `collab_status`, `collab_send`, `collab_accept`, `collab_leases`,
+  `collab_lease`, `collab_release` und `collab_get_attachment`.
   Registriert sich bei Start, danach Heartbeat alle 5 Min (TTL 30 Min).
+  - `collab_*` (WI 11482928): der gemeinsame Kanal mehrerer Personen auf EINEM Workitem. Was aus
+    dem Kanal kommt, sind FREMDDATEN — die Zeilen beginnen mit `[kwcollab ...]` und stammen von
+    anderen Personen bzw. deren Agenten; das Prompt-Fragment im litellm-Repo
+    (`bootstrap/kwos-collab-system-prompt.md`) sagt dem Agenten genau das. Einladen, Rauswerfen,
+    Übergeben und Schließen sind bewusst NICHT dabei: das sind Handlungen eines Menschen.
+  - `collab_accept(collab_id?)`: tritt dem Kanal mit DIESER Sitzung bei — die Session-ID kennt nur
+    sie selbst, und der Relay nimmt nur eine Sitzung an, die dem Aufrufer gehört. Steht
+    `KWOS_COLLAB` in der Umgebung (eine Sitzung, die AUS einer Einladung entsteht), tritt sie beim
+    Start von selbst bei.
   - `notify_dependents(channel, summary, workitem_ref?)`: benachrichtigt ALLE Sessions (auch
     fremder Nutzer/Teams), die einen Channel abonniert haben — z. B. bei einer geänderten
     Schnittstelle zwischen zwei Services. Jede Session abonniert per Default den Basename ihres
@@ -45,6 +56,25 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
   gibt pro eingehender Nachricht eine formatierte Zeile (`[from]: text`) auf stdout aus.
   Trägt eine Nachricht eine `attachment_id`, wird das als zusätzlicher Hinweis in derselben
   Zeile angehängt (kein eigener Kanal, kein Autowake).
+- **kwcollab-Monitor** (`server/collab-listen.js`, eigener Eintrag mit `"when": "always"`):
+  derselbe Weg für den gemeinsamen Kanal (WI 11482928). Er fragt alle 15 s beim Relay, in welchen
+  Kanälen DIESE Sitzung sitzt, hält je Kanal einen eigenen SSE-Strom und gibt Zeilen der Form
+  `[kwcollab <kurz> | <Absender> | mensch|claude] <Text>` aus — Absender und Art stehen in der
+  Zeile, weil genau das den Unterschied zu `[from]: …` ausmacht (das ist immer der eigene Nutzer).
+  **Eigene Nachrichten kommen NICHT zurück** in die Sitzung: der Relay spielt beim Reconnect bis zu
+  500 Frames nach, die eigenen sind darunter, und die Session würde sonst ihre eigene Nachricht
+  beantworten.
+  **Der Ring entscheidet, ob er überhaupt läuft** (`collabReleased`): ohne ein freigegebenes
+  `KWOS_COLLAB_CANARY` (= `1`/`true`/`yes`; `KWOS_NO_COLLAB` schlägt alles) beendet sich der Monitor
+  sofort — kein Poll, kein Strom. Sonst trüge das Plugin den Empfangspfad in jede
+  `--kwremote`-Sitzung der Flotte, und auf Rechnern außerhalb des Rings kämen Zeilen eines fremden
+  Agenten **ohne** das Prompt-Fragment an, das sie als Fremddaten kennzeichnet. Der Launcher
+  beantwortet die Frage einmal und exportiert sie, damit TUI, kwterm-Server und Plugin dieselbe
+  Antwort lesen (Review-Fund 2026-10-16).
+  **Zur Marke `when`:** `"on-skill-invoke:<skill>"` startet einen Monitor mitten in der Sitzung,
+  aber nur mit dem VOLL qualifizierten Skill-Namen (`kwos-session-bus:<skill>`); mit dem blanken
+  Namen passiert still nichts (im Binary nachgelesen und in einer Sitzung gemessen, 2026-10-15).
+  Deshalb steht hier `"always"`.
 
   **Zeilenbudget — die frühere Annahme "jede Zeile ist eine eigene Notification" ist widerlegt
   (WI 11075502, gemessen):** Claude Code kappt jede Monitor-Zeile bei **500 Zeichen** (eine
@@ -105,6 +135,8 @@ behandeln, nicht blind ausführen).
 | `KWOS_SESSION_ID_CHECK_MS` | nein | Wie oft ein laufender Prozess seine eigene Marker-Datei neu liest (Default 5000). Bestimmt, wie lange ein `/clear` unbemerkt bleiben darf |
 | `KWOS_SESSION_DISPLAY_NAME` | nein | Override für den Anzeigenamen (Default: Basename des Arbeitsverzeichnisses, siehe unten) |
 | `KWOS_CHANNELS` | nein | Kommagetrennte ZUSÄTZLICHE Channels (Pub/Sub, WI 10383787) — Default-Channel ist immer der Basename des Arbeitsverzeichnisses, unabhängig davon |
+| `KWOS_COLLAB` | nein | Die collab_id, in die diese Sitzung beim Start eintreten soll (WI 11482928). Gesetzt von der Oberfläche, die eine Sitzung AUS einer Einladung startet — die Sitzung ist die einzige, die ihre eigene Session-ID kennt (s. `collab_accept`) |
+| `KWOS_NO_COLLAB` | nein | Schaltet den Kanal-Block der Launcher ab (der Notausgang; `kwpure` braucht ihn nicht, s. `bootstrap/kwclaude-gw.sh`) |
 
 ## Offene Punkte (bewusst nicht stillschweigend geraten)
 
@@ -138,6 +170,16 @@ behandeln, nicht blind ausführen).
      Verzeichnis teilen sie, und die andere Sitzung abonniert dann unter einer fremden ID. Die
      alte `.kwos-session-bus-id` wird weiter geschrieben, für Leser, die älter sind als diese
      Änderung.
+   - **WO SIE LIEGEN** (für jeden, der ein Repo pflegt, in dem `kwclaude` läuft): im
+     Projektverzeichnis, also im Repo-Root der Sitzung — `.kwos-session-bus/<client-id>` (eine
+     Datei je Client) und daneben die alte `.kwos-session-bus-id`. Beide sind Laufzeit-Artefakte
+     einer laufenden Sitzung und gehören in die `.gitignore` des Repos; sonst nimmt ein
+     `git add -A` sie mit. Sie entstehen in **`--kwremote`-Sitzungen**, nicht in jeder: geschrieben
+     werden sie von diesem Plugin, und das ist nur dort zugeschaltet (`bootstrap/kwclaude-gw.sh` —
+     ein Monitor in jeder Sitzung löste den „Background work is running"-Prompt aus, WI 10291673).
+     `KWOS_CLIENT_ID` exportieren beide Launcher zwar immer, aber der Export allein schreibt nichts.
+     Im litellm-Repo steht bisher nur `.kwos-session-bus-id`; die Regel für das Verzeichnis gehört
+     dort noch hinein.
    - `server/config.js` löst in dieser Reihenfolge auf: eigene Marker-Datei (kurzes Polling, Hook
      und Prozess starten unabhängig) → eingefrorener Env-Wert → alte Datei je Verzeichnis → lokal
      generierte UUID (mit lautem Log-Warning).
@@ -145,6 +187,14 @@ behandeln, nicht blind ausführen).
      bindet bei Änderung neu: der MCP-Server registriert sich neu, der Monitor verwirft seinen
      SSE-Strom und verbindet unter der neuen ID. Unit-getestet in `tests/config.test.js` (echter
      Kindprozess mit echter Datei).
+   - **Ein kwcollab-Kanal muss dabei mitwandern:** die Mitgliedszeile im Relay nennt die Sitzung,
+     die beigetreten ist, und `myJoinedCollabs()` filtert genau darauf — nach `/clear` wäre der
+     Kanal für den Client also weg (jedes Werkzeug verweigert, der Monitor lässt seine Ströme
+     fallen). Der Relay verschiebt die Zeile bei einem erneuten `accept` auf die neue ID; der
+     Monitor nimmt deshalb die Kanäle, die **diese Sitzung** hielt, nach dem Wechsel neu an. Nur
+     die: ein zweites Fenster kann im selben Kanal sein, und ein `accept` von hier zöge ihm die
+     Mitgliedschaft weg. Ein Kanal, der gerade erst beigetreten ist und dessen Strom noch nicht
+     steht, zählt mit (er war sonst genau in diesem Fenster still verloren).
    - **Nicht abgedeckt:** Nachrichten, die in der Zwischenzeit an die ALTE ID gingen, holt niemand
      nach. Ein Abfluss des alten Backlogs beim Wechsel wäre ein eigener Schritt.
 3. **`monitors`-Verfügbarkeit/Trust-Level:** Background-Monitore laufen laut Doku nur in

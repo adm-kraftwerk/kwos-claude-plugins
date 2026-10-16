@@ -51,6 +51,15 @@ test("KWOS_SESSION_ID_CHECK_MS: a typo becomes the default, never a busy loop", 
   assert.equal(readCheckInterval("7000"), 7000);
 });
 
+// The kwcollab monitor polls a different interval through the same rule (KWOS_COLLAB_POLL_MS, 15 s
+// instead of 5 s) -- its own default, the same floor.
+test("readCheckInterval: the caller's default is the fallback, not the marker's 5000", () => {
+  assert.equal(readCheckInterval(undefined, 15_000), 15_000);
+  assert.equal(readCheckInterval("abc", 15_000), 15_000);
+  assert.equal(readCheckInterval("0", 15_000), 15_000);
+  assert.equal(readCheckInterval("20000", 15_000), 20_000, "a real value wins over the default");
+});
+
 // The actual complaint: after `/clear` (or `--resume`) Claude Code hands out a new session id
 // inside the running process. The relay hooks see the new id and the PWA lists the session under
 // it, while the already-running listener keeps the old one -- so a message sent from the phone is
