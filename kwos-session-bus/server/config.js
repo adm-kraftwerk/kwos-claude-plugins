@@ -182,10 +182,13 @@ export const config = {
  * `setInterval(fn, NaN)` and `setInterval(fn, 0)` both fire every millisecond, and this check runs
  * as a stat+read in two processes per session. Anything below the floor is a busy loop, not a
  * polling interval, so it falls back to the default as well.
+ *
+ * `fallback` is the caller's own default (the kwcollab monitor polls every 15 s, not every 5 s) --
+ * one spelling of the rule, two intervals.
  */
-export function readCheckInterval(raw) {
+export function readCheckInterval(raw, fallback = 5000) {
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 250 ? n : 5000;
+  return Number.isFinite(n) && n >= 250 ? n : fallback;
 }
 
 /** Muss vor jeder Nutzung von config.sessionId aufgerufen werden (einmalig, memoisiert). */

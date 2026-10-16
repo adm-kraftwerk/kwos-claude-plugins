@@ -17,7 +17,7 @@
 // monitor that hands them back to Claude would answer its own message, forever.
 
 import { fileURLToPath } from "node:url";
-import { config, ensureSessionId, refreshSessionId } from "./config.js";
+import { config, ensureSessionId, refreshSessionId, readCheckInterval } from "./config.js";
 import { log } from "./log.js";
 import { runSseReceiver } from "./sse-receiver.js";
 import { createLineWriter } from "./listen.js";
@@ -34,8 +34,12 @@ import * as collab from "./collab.js";
  * 2026-10-15. At a few hundred concurrent sessions that is single-digit requests per second --
  * cheap, but it is a cost that lasts for the whole life of every session, so it can be raised
  * without a new build: `KWOS_COLLAB_POLL_MS`.
+ *
+ * Validated like the marker interval (readCheckInterval): a typo must not become the interval --
+ * `setInterval(fn, NaN)` fires every millisecond, and this one is a request against the relay in
+ * every session of the fleet (review finding 2026-10-16).
  */
-export const COLLAB_POLL_MS = Number(process.env.KWOS_COLLAB_POLL_MS || 15_000);
+export const COLLAB_POLL_MS = readCheckInterval(process.env.KWOS_COLLAB_POLL_MS, 15_000);
 
 /**
  * One SSE frame -> the line to print, or null when it must NOT be printed.
@@ -67,8 +71,10 @@ async function main() {
   let stopping = false;
   let signalEnded;
   const ended = new Promise((resolve) => { signalEnded = resolve; });
-  let sessionAbort = new AbortController();
-  const stop = () => { stopping = true; sessionAbort.abort(); signalEnded(); };
+  // No session-wide AbortController here: every stream has its own controller in `open`, and
+  // `closeAll()` is what ends them (on a /clear re-bind and on the way out). A second, unused
+  // controller would only look like it did something.
+  const stop = () => { stopping = true; signalEnded(); };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
@@ -82,8 +88,19 @@ async function main() {
     open.clear();
   };
 
-  async function poll() {
-    if (stopping) return;
+  // One poll at a time, and a second caller shares the one in flight instead of starting another
+  // (review finding 2026-10-16): the interval and the /clear re-bind both call this, and two polls
+  // running side by side would each find `open` empty for a channel and each open a stream for it --
+  // every line of that channel delivered twice. A poll that overruns its interval (a slow relay;
+  // `call()` sets no timeout) is exactly the case that produces that overlap.
+  let inflight = null;
+  function poll() {
+    if (stopping) return Promise.resolve();
+    if (!inflight) inflight = pollOnce().finally(() => { inflight = null; });
+    return inflight;
+  }
+
+  async function pollOnce() {
     let joined = [];
     try {
       joined = await collab.myJoinedCollabs();
@@ -98,14 +115,24 @@ async function main() {
       if (!wanted.has(id)) { entry.controller.abort(); open.delete(id); }
     }
     for (const c of joined) {
-      if (open.has(c.collab_id)) continue;
-      const controller = new AbortController();
-      open.set(c.collab_id, { controller });
       const members = Array.isArray(c.members) ? c.members : [];
+      const existing = open.get(c.collab_id);
+      if (existing) {
+        // Same stream, fresh names: the member list is what turns an opaque login into a display
+        // name, and it grows while the channel is open (review finding 2026-10-16 -- the list used
+        // to be frozen at the moment the stream was opened, so later joiners stayed logins).
+        existing.members = members;
+        continue;
+      }
+      const controller = new AbortController();
+      const entry = { controller, members };
+      open.set(c.collab_id, entry);
       log.info("Collab-Kanal verbunden.", { collabId: c.collab_id, workitem: c.workitem });
       runSseReceiver(
         (raw) => {
-          const line = frameToLine(raw, { members, selfSessionId: config.sessionId, collabId: c.collab_id });
+          const line = frameToLine(raw, {
+            members: entry.members, selfSessionId: config.sessionId, collabId: c.collab_id,
+          });
           if (line) writeLine(line);
         },
         { signal: controller.signal, url: collab.collabEventsUrl(c.collab_id) }
@@ -134,7 +161,6 @@ async function main() {
     }
     if (!changed) return;
     closeAll();
-    sessionAbort = new AbortController();
     await poll();
   }, config.sessionIdCheckMs);
   watch.unref();

@@ -9,6 +9,12 @@
 // If the prefix drifts, the fragment stops matching the lines and kwcollab messages silently get
 // treated like kwremote ones -- which is the one mistake this feature must not make.
 
+// The measured line budget, from the sibling monitor: Claude Code cuts every monitor line at 500
+// CHARACTERS and cuts at the line END (WI 11075502, measured), so the line has to cap itself and
+// its own truncation marker has to survive. Imported rather than repeated -- a second copy of a
+// measured number is a second number that can drift.
+import { MAX_LINE_CHARS } from "./listen.js";
+
 export const COLLAB_LINE_PREFIX = "[kwcollab";
 
 // The whole point of the prefix: the reader (Claude AND the human in the transcript) must see, in
@@ -25,14 +31,24 @@ export function collabShortId(collabId) {
  * One channel line. A message with an attachment and no text is a valid case (a screenshot of the
  * failure speaks for itself), so the line names the attachment instead of ending in a colon with
  * nothing after it.
+ *
+ * `maxChars` bounds the WHOLE line, not the text (review finding 2026-10-16): the prefix, the
+ * channel id, the sender and the kind are part of what the harness counts. Capping only the text
+ * put the line at ~540-560 characters, and the cut lands at the line end -- exactly where the
+ * truncation marker sits, so a truncated message arrived looking complete.
  */
-export function collabLine({ collabId, from, kind, text, attachmentId, maxChars = 500 }) {
+export function collabLine({ collabId, from, kind, text, attachmentId, maxChars = MAX_LINE_CHARS }) {
   const who = typeof from === "string" && from.trim() ? from.trim() : "?";
   const authorKind = COLLAB_KINDS.includes(kind) ? kind : "claude";
   let body = typeof text === "string" ? text.trim() : "";
   if (!body && attachmentId) body = `[Anhang: mit collab_get_attachment ${attachmentId} abrufbar]`;
-  if (body.length > maxChars) body = `${body.slice(0, maxChars)}… [gekürzt, ${body.length} Zeichen]`;
-  return `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)} | ${who} | ${authorKind}] ${body}`;
+  const head = `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)} | ${who} | ${authorKind}] `;
+  if (head.length + body.length <= maxChars) return head + body;
+  // Reserve the marker's own length, and slice at the end as the hard guarantee -- the sender name
+  // comes from the relay and its length is not ours to trust (same two steps as formatLine).
+  const marker = `… [gekürzt, ${body.length} Zeichen]`;
+  const keep = Math.max(0, maxChars - head.length - marker.length);
+  return `${head}${body.slice(0, keep)}${marker}`.slice(0, maxChars);
 }
 
 /**

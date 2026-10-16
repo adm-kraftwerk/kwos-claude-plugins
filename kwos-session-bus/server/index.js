@@ -389,6 +389,12 @@ export async function handleToolCall(name, args = {}) {
         ttlSec: args.ttl_sec,
         reason: args.reason,
       });
+      // A held section comes back as 409 and `call()` already throws with the holder in the text.
+      // Anything else without a lease is a shape this client does not know -- say that instead of
+      // dying on `lease.section` (review finding 2026-10-16).
+      if (!lease?.section) {
+        throw new Error("Der Relay hat keine Reservierung zurückgegeben (unerwartete Antwort).");
+      }
       return {
         content: [{
           type: "text",

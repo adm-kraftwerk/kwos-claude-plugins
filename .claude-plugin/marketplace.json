@@ -22,7 +22,7 @@
     {
       "name": "kwos-session-bus",
       "source": { "source": "git-subdir", "url": "https://github.com/adm-kraftwerk/kwos-claude-plugins", "path": "kwos-session-bus", "ref": "main" },
-      "description": "MCP client for the kw/OS Session Message Relay — messaging between Claude Code sessions (list_sessions, send_message, broadcast, notify_dependents, ask_remote, get_message, get_attachment)",
+      "description": "MCP client for the kw/OS Session Message Relay — messaging between Claude Code sessions and the kwcollab channel (list_sessions, send_message, broadcast, notify_dependents, ask_remote, get_message, get_attachment, collab_status, collab_accept, collab_send, collab_leases, collab_lease, collab_release, collab_get_attachment)",
       "version": "0.4.1"
     },
     {

@@ -15603,9 +15603,9 @@ var config2 = {
    */
   collab: typeof process.env.KWOS_COLLAB === "string" && process.env.KWOS_COLLAB.trim() ? process.env.KWOS_COLLAB.trim() : null
 };
-function readCheckInterval(raw) {
+function readCheckInterval(raw, fallback = 5e3) {
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 250 ? n : 5e3;
+  return Number.isFinite(n) && n >= 250 ? n : fallback;
 }
 async function ensureSessionId() {
   if (!config2.sessionId) config2.sessionId = await resolveSessionId();
@@ -16289,6 +16289,9 @@ async function handleToolCall(name, args = {}) {
         ttlSec: args.ttl_sec,
         reason: args.reason
       });
+      if (!lease?.section) {
+        throw new Error("Der Relay hat keine Reservierung zur\xFCckgegeben (unerwartete Antwort).");
+      }
       return {
         content: [{
           type: "text",

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { installFetchMock } from "./helpers/fetch-mock.js";
 import { collabLine, collabClosedLine, collabShortId, senderName, COLLAB_LINE_PREFIX } from "../server/collabLine.js";
 import { frameToLine } from "../server/collab-listen.js";
+import { MAX_LINE_CHARS } from "../server/listen.js";
 
 // kwcollab: die Zeile, die im Verlauf landet (WI 11482928).
 //
@@ -43,6 +44,22 @@ test("collabLine: eine lange Nachricht wird gekappt und nennt die volle Laenge",
   const line = collabLine({ collabId: "a-1", from: "X", kind: "claude", text: "z".repeat(5000), maxChars: 100 });
   assert.ok(line.length < 200, `Zeile zu lang: ${line.length}`);
   assert.match(line, /\[gekürzt, 5000 Zeichen\]$/);
+});
+
+// Review-Fund 2026-10-16: gekappt werden muss die GANZE Zeile, nicht der Text. Claude Code kappt
+// jede Monitor-Zeile bei 500 Zeichen und zwar am ZEILENENDE (WI 11075502, gemessen) -- genau dort,
+// wo der Kuerzungs-Marker steht. Nur den Text zu kappen brachte die Zeile auf ~540-560 Zeichen: die
+// Kappung frass den Marker, und die Nachricht kam abgeschnitten an, ohne dass es jemand sah.
+test("collabLine: die ganze Zeile bleibt im Budget, auch im Worst Case", () => {
+  const line = collabLine({
+    collabId: "7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c",
+    from: "M".repeat(120),            // der Absender kommt vom Relay, seine Laenge ist nicht unsere
+    kind: "claude",
+    text: "z".repeat(5000),
+    attachmentId: "11111111-1111-1111-1111-111111111111",
+  });
+  assert.ok(line.length <= MAX_LINE_CHARS, `Zeile zu lang: ${line.length}`);
+  assert.match(line, /\[gekürzt, 5000 Zeichen\]$/, "der Marker muss die Kappung ueberleben");
 });
 
 test("collabLine: ein fehlender Absender wird nicht erfunden", () => {
