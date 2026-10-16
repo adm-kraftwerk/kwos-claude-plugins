@@ -290,3 +290,40 @@ test("nach einem Session-Wechsel nimmt der Monitor seine Kanaele neu an", async 
   // nicht stehen.
   assert.ok(!/collab\.myJoinedCollabs\(/.test(tail), "kein Sammel-accept ueber alle Kanaele des Logins");
 });
+
+// Der Ring entscheidet den Kanal (Review-Fund 2026-10-16): ohne dieses Gate traegt das Plugin den
+// EMPFANGSPFAD in jede --kwremote-Sitzung der Flotte -- ein Poll gegen den Relay im 15-s-Takt fuer
+// einen Kanal, den keine Oberflaeche anbietet. Und das Prompt-Fragment, das "[kwcollab ...]"-Zeilen
+// als FREMDDATEN kennzeichnet, haengt der Launcher unter DEMSELBEN Schalter an: ausserhalb des
+// Rings kaemen Zeilen eines fremden Agenten ohne diese Rahmung an.
+test("collabReleased: dieselben Schreibweisen wie der Launcher, NO schlaegt alles", async () => {
+  const { collabReleased } = await import("../server/collab-listen.js");
+  // Der Launcher akzeptiert 1|true|yes (getrimmt, case-insensitiv) und exportiert normalisiert
+  // 1/0. Dieselbe Regel hier zu lesen heisst: ein von Hand gesetztes Wort verhaelt sich wie eine
+  // Launcher-Antwort, statt einen Launcher zu brauchen.
+  for (const v of ["1", "true", "yes", "TRUE", "Yes", " 1 "]) {
+    assert.equal(collabReleased({ KWOS_COLLAB_CANARY: v }), true, JSON.stringify(v));
+  }
+  // Alles andere ist AUS -- auch ungesetzt: der Launcher im Feld exportiert die Variable noch
+  // nicht, und ein Feature, das sich selbst einschaltet, ist keine Freigabe.
+  for (const env of [{}, { KWOS_COLLAB_CANARY: "" }, { KWOS_COLLAB_CANARY: "0" },
+    { KWOS_COLLAB_CANARY: "no" }, { KWOS_COLLAB_CANARY: "canary" }]) {
+    assert.equal(collabReleased(env), false, JSON.stringify(env));
+  }
+  assert.equal(collabReleased(undefined), false, "kein Environment ist auch kein Ja");
+  // KWOS_NO_COLLAB schlaegt alles -- und zaehlt wie in der Shell als "nicht leer", also auch ein
+  // einzelnes Leerzeichen.
+  assert.equal(collabReleased({ KWOS_COLLAB_CANARY: "1", KWOS_NO_COLLAB: "1" }), false);
+  assert.equal(collabReleased({ KWOS_COLLAB_CANARY: "1", KWOS_NO_COLLAB: " " }), false);
+  assert.equal(collabReleased({ KWOS_COLLAB_CANARY: "0", KWOS_NO_COLLAB: "" }), false);
+});
+
+test("collabReleased: der Monitor startet gar nicht erst, wenn der Ring ihn nicht kennt", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const src = await readFile(new URL("../server/collab-listen.js", import.meta.url), "utf8");
+  const main = src.slice(src.indexOf("async function main()"), src.indexOf("// Guard as in index.js"));
+  const gate = main.indexOf("if (!collabReleased())");
+  const session = main.indexOf("await ensureSessionId()");
+  assert.ok(gate > 0, "das Ring-Gate muss in main() stehen");
+  assert.ok(session > gate, "und VOR allem anderen: kein ensureSessionId, kein Poll, kein Strom");
+});

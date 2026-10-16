@@ -42,6 +42,35 @@ import * as collab from "./collab.js";
 export const COLLAB_POLL_MS = readCheckInterval(process.env.KWOS_COLLAB_POLL_MS, 15_000);
 
 /**
+ * Is the channel released on THIS machine? The launcher answers that question once and exports the
+ * answer as `KWOS_COLLAB_CANARY` ("explicit switch > remembered ring > OFF" --
+ * bootstrap/kwclaude-gw.sh), so kwterm's server, the TUI and this monitor read the SAME answer
+ * instead of three guesses.
+ *
+ * WHY THE MONITOR ASKS AT ALL (review finding 2026-10-16): without this the plugin would carry the
+ * receive path of the channel into EVERY `--kwremote` session of the fleet -- the monitor would
+ * poll `GET /v1/collabs` every 15 s for a channel that no interface offers and no human asked for.
+ * Worse, the prompt fragment that marks `[kwcollab …]` lines as FOREIGN DATA is appended by the
+ * launcher under the same switch -- so outside the ring, lines from another person's agent would
+ * arrive WITHOUT the framing that tells the session to treat them as data. The ring decides the
+ * channel; it has to decide its receive path too.
+ *
+ * Anything else counts as OFF, including unset: the launcher in the field today does not export
+ * the variable yet, and a feature that switches itself on is not a release.
+ *
+ * The spellings are the launcher's own (bootstrap/kwclaude-gw.sh, `kwos_collab_released`): `1`,
+ * `true` or `yes`, case-insensitive and whitespace-stripped, and `KWOS_NO_COLLAB` beats everything
+ * (tested as "non-empty", the way `[ -n … ]` does it). The launcher normalises what it exports to
+ * `1`/`0`, so this is the same answer by the same rule -- a hand-set value just behaves like a
+ * launcher answer instead of needing one.
+ */
+export function collabReleased(env = process.env) {
+  if (String(env?.KWOS_NO_COLLAB ?? "") !== "") return false;
+  const v = String(env?.KWOS_COLLAB_CANARY ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+
+/**
  * One SSE frame -> the line to print, or null when it must NOT be printed.
  *
  * Null for our own messages (see the file header) and for anything unreadable: a monitor that
@@ -66,6 +95,13 @@ export function frameToLine(raw, { members = [], selfSessionId = null, collabId 
 }
 
 async function main() {
+  // The ring decides (s. collabReleased): outside it this monitor does not run at all -- no poll,
+  // no stream, no line. Logged once, because "the channel is silent" and "the channel was never
+  // switched on here" look identical from inside a session.
+  if (!collabReleased()) {
+    log.info("kwcollab ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY) -- Monitor beendet sich.");
+    return;
+  }
   await ensureSessionId();
 
   let stopping = false;

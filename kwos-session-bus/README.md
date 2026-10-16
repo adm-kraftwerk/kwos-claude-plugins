@@ -64,6 +64,13 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
   **Eigene Nachrichten kommen NICHT zurück** in die Sitzung: der Relay spielt beim Reconnect bis zu
   500 Frames nach, die eigenen sind darunter, und die Session würde sonst ihre eigene Nachricht
   beantworten.
+  **Der Ring entscheidet, ob er überhaupt läuft** (`collabReleased`): ohne ein freigegebenes
+  `KWOS_COLLAB_CANARY` (= `1`/`true`/`yes`; `KWOS_NO_COLLAB` schlägt alles) beendet sich der Monitor
+  sofort — kein Poll, kein Strom. Sonst trüge das Plugin den Empfangspfad in jede
+  `--kwremote`-Sitzung der Flotte, und auf Rechnern außerhalb des Rings kämen Zeilen eines fremden
+  Agenten **ohne** das Prompt-Fragment an, das sie als Fremddaten kennzeichnet. Der Launcher
+  beantwortet die Frage einmal und exportiert sie, damit TUI, kwterm-Server und Plugin dieselbe
+  Antwort lesen (Review-Fund 2026-10-16).
   **Zur Marke `when`:** `"on-skill-invoke:<skill>"` startet einen Monitor mitten in der Sitzung,
   aber nur mit dem VOLL qualifizierten Skill-Namen (`kwos-session-bus:<skill>`); mit dem blanken
   Namen passiert still nichts (im Binary nachgelesen und in einer Sitzung gemessen, 2026-10-15).
