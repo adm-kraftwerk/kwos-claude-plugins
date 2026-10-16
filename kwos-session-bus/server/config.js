@@ -160,9 +160,20 @@ export const config = {
   // How often a long-running process re-reads its own marker. The file is a few bytes and the check
   // is one stat+read; 5s costs nothing and bounds how long a /clear can go unnoticed. Same interval
   // as CLAUDE_CODE_SESSION_ID_CHECK_MS in the launchers' world: the latency the reader feels.
-  sessionIdCheckMs: Number(process.env.KWOS_SESSION_ID_CHECK_MS || 5000),
+  sessionIdCheckMs: readCheckInterval(process.env.KWOS_SESSION_ID_CHECK_MS),
   ttlMinutes: 30,
 };
+
+/**
+ * The poll interval from the environment, or the default. A typo must not become the interval:
+ * `setInterval(fn, NaN)` and `setInterval(fn, 0)` both fire every millisecond, and this check runs
+ * as a stat+read in two processes per session. Anything below the floor is a busy loop, not a
+ * polling interval, so it falls back to the default as well.
+ */
+export function readCheckInterval(raw) {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 250 ? n : 5000;
+}
 
 /** Muss vor jeder Nutzung von config.sessionId aufgerufen werden (einmalig, memoisiert). */
 export async function ensureSessionId() {

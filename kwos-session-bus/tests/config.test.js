@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { findMarker } from "../server/config.js";
+import { findMarker, readCheckInterval } from "../server/config.js";
 
 const CONFIG_URL = new URL("../server/config.js", import.meta.url).href;
 const CLIENT_ID = "cli-1234-abcd1234";
@@ -26,8 +26,29 @@ test("findMarker walks up from the starting directory", () => {
 
 test("findMarker: an empty marker is not an answer", () => {
   const root = scratch();
-  writeFileSync(join(root, ".kwos-session-bus-id"), "   \n", "utf8");
-  assert.equal(findMarker(root, ".kwos-session-bus-id"), null);
+  const blank = join(root, ".kwos-session-bus-id");
+  writeFileSync(blank, "   \n", "utf8");
+  // Deliberately NOT `assert.equal(findMarker(root, ...), null)`: the walk continues past a blank
+  // marker and may legitimately find one in an ANCESTOR of the scratch dir. On a machine with a
+  // stale marker above the temp directory (measured 2026-10-16: `~/.kwos-session-bus-id` from an
+  // earlier session whose cwd was the home directory) that assertion is red, and the test then
+  // fails for the machine it runs on instead of for the code. What this test is about is the blank
+  // file in the scratch dir -- so that is what it asserts.
+  assert.notEqual(findMarker(root, ".kwos-session-bus-id")?.path, blank);
+});
+
+// `setInterval(fn, NaN)` and `setInterval(fn, 0)` both fire every millisecond. A typo in the
+// environment must not turn the marker check -- a stat+read, in two processes per session -- into a
+// 1 ms loop, so anything that is not a plausible interval falls back to the default.
+test("KWOS_SESSION_ID_CHECK_MS: a typo becomes the default, never a busy loop", () => {
+  assert.equal(readCheckInterval(undefined), 5000, "unset");
+  assert.equal(readCheckInterval(""), 5000);
+  assert.equal(readCheckInterval("abc"), 5000, "not a number");
+  assert.equal(readCheckInterval("0"), 5000);
+  assert.equal(readCheckInterval("-5"), 5000);
+  assert.equal(readCheckInterval("5"), 5000, "below the floor is a busy loop, not a poll");
+  assert.equal(readCheckInterval("250"), 250);
+  assert.equal(readCheckInterval("7000"), 7000);
 });
 
 // The actual complaint: after `/clear` (or `--resume`) Claude Code hands out a new session id
