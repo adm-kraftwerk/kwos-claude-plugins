@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -66,10 +65,17 @@ test("handleToolCall: unbekanntes Tool wirft (kein stiller No-Op)", async () => 
 // in Produktion der ALTE MCP-Server laeuft (genau so schon einmal passiert, s. README). Waehrend
 // der Arbeit an WI 11075502 ist das Bundle zweimal veraltet gewesen. Dieser Test macht daraus
 // einen roten Test statt eines still veralteten Servers.
-test("committed index.bundle.mjs entspricht dem aktuellen Quellstand", (t) => {
+test("committed index.bundle.mjs entspricht dem aktuellen Quellstand", async (t) => {
   const here = fileURLToPath(new URL(".", import.meta.url));
-  const esbuild = join(here, "..", "node_modules", ".bin", "esbuild");
-  if (!existsSync(esbuild)) {
+  // esbuild ueber seine JS-API statt ueber node_modules/.bin/esbuild: der Eintrag dort ist eine
+  // Shell-Datei OHNE Endung (auf POSIX ein Symlink auf das Binary). execFileSync kann sie auf
+  // Windows nicht starten -- der Aufruf starb mit ENOENT, existSync() sah die Datei aber, also
+  // griff auch der skip-Zweig darunter nicht. Ergebnis: auf Windows war dieses Gate DAUERROT,
+  // und zwar unabhaengig vom Code -- ein Gate, das nur auf einer Plattform laufen kann.
+  let build;
+  try {
+    ({ build } = await import("esbuild"));
+  } catch {
     // Frischer Klon ohne `npm install` -- kein Fehlschlag, nur kein Pruefwert.
     t.skip("esbuild nicht installiert (npm install) -- Bundle-Abgleich uebersprungen");
     return;
@@ -77,11 +83,15 @@ test("committed index.bundle.mjs entspricht dem aktuellen Quellstand", (t) => {
   const dir = mkdtempSync(join(tmpdir(), "kwos-bundle-"));
   const out = join(dir, "index.bundle.mjs");
   try {
-    execFileSync(
-      esbuild,
-      ["server/index.js", "--bundle", "--platform=node", "--format=esm", `--outfile=${out}`, "--external:node:*"],
-      { cwd: join(here, ".."), stdio: "pipe" }
-    );
+    await build({
+      entryPoints: [join(here, "..", "server", "index.js")],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      outfile: out,
+      external: ["node:*"],
+      logLevel: "silent",
+    });
     const fresh = readFileSync(out);
     const committed = readFileSync(join(here, "..", "server", "index.bundle.mjs"));
     assert.ok(
