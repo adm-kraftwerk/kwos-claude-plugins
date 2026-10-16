@@ -272,7 +272,7 @@ test("nach einem Session-Wechsel nimmt der Monitor seine Kanaele neu an", async 
   const start = src.indexOf("if (!changed) return;");
   assert.ok(start > 0, "der Nachlauf-Zweig ist nicht mehr auffindbar -- dann prueft dieser Fall nichts");
   const tail = src.slice(start, src.indexOf("}, config.sessionIdCheckMs)"));
-  const capture = tail.indexOf("const was = [...open.keys()]");
+  const capture = tail.indexOf("const was = ");
   const close = tail.indexOf("closeAll()");
   const accept = tail.indexOf("collab.acceptCollab(id)");
   assert.ok(capture > 0 && close > capture, "die Kanal-IDs muessen VOR closeAll() gemerkt werden");
@@ -280,6 +280,12 @@ test("nach einem Session-Wechsel nimmt der Monitor seine Kanaele neu an", async 
   // Und nur die eigenen Kanaele: niemals "alles, wo mein Login drin ist" (ein zweites Fenster kann
   // im selben Kanal sein -- ein accept von hier zoege ihm die Mitgliedschaft weg).
   assert.match(tail, /for \(const id of was\)/, "erneut angenommen wird nur, was dieser Monitor offen hatte");
+  // Die Menge muss aber vollstaendig sein: `open` allein verpasst den Kanal, der gerade erst
+  // beigetreten ist und dessen Strom noch nicht steht (der Poll oeffnet ihn erst im naechsten Takt).
+  // Ein /clear in diesem Fenster haette den Kanal still verloren -- nach dem Wechsel nennt die
+  // Mitgliedszeile die alte ID, also findet der naechste Poll gar keinen Kanal mehr.
+  assert.match(tail, /const was = \[\.\.\.new Set\(\[\.\.\.open\.keys\(\), \.\.\.lastJoined\]\)\]/,
+    "die Menge muss die offenen Stroeme UND die zuletzt gemeldeten Kanaele umfassen");
   // Kein Sammel-accept: der Aufruf (nicht das Wort -- der Kommentar nennt die Funktion) darf hier
   // nicht stehen.
   assert.ok(!/collab\.myJoinedCollabs\(/.test(tail), "kein Sammel-accept ueber alle Kanaele des Logins");

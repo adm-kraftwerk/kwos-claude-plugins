@@ -88,6 +88,14 @@ async function main() {
     open.clear();
   };
 
+  // The channels THIS session holds on the relay, as of the last poll that reached the relay. Kept
+  // next to `open` because a channel can be joined a moment before its stream is up: a `/clear` in
+  // that window finds an empty `open`, and after the change the poll cannot recover it either (the
+  // member row still names the OLD session id, so `myJoinedCollabs` reports no channel at all) --
+  // the channel would be silently gone. Not cleared on a failed poll: what this session held a
+  // minute ago is a better answer than nothing.
+  let lastJoined = new Set();
+
   // One poll at a time, and a second caller shares the one in flight instead of starting another
   // (review finding 2026-10-16): the interval and the /clear re-bind both call this, and two polls
   // running side by side would each find `open` empty for a channel and each open a stream for it --
@@ -111,6 +119,7 @@ async function main() {
       return;
     }
     const wanted = new Set(joined.map((c) => c.collab_id));
+    lastJoined = wanted;
     for (const [id, entry] of [...open]) {
       if (!wanted.has(id)) { entry.controller.abort(); open.delete(id); }
     }
@@ -167,10 +176,12 @@ async function main() {
     // 2026-10-16). Without this call the channel was gone for the client after every /clear -- the
     // tools refused and this monitor let its streams go.
     //
-    // Only the channels this monitor was ACTUALLY in are re-accepted, never "everything my login is
+    // Only the channels this session ACTUALLY held are re-accepted, never "everything my login is
     // joined to": a second window may be in the same channel, and an accept from here would move the
-    // membership away from it.
-    const was = [...open.keys()];
+    // membership away from it. `lastJoined` is in here for the channel that was joined but whose
+    // stream had not come up yet (see above) -- that one is this session's too, or the poll would
+    // not have reported it.
+    const was = [...new Set([...open.keys(), ...lastJoined])];
     closeAll();
     for (const id of was) {
       try {

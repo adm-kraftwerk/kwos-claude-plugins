@@ -180,6 +180,14 @@ behandeln, nicht blind ausführen).
      bindet bei Änderung neu: der MCP-Server registriert sich neu, der Monitor verwirft seinen
      SSE-Strom und verbindet unter der neuen ID. Unit-getestet in `tests/config.test.js` (echter
      Kindprozess mit echter Datei).
+   - **Ein kwcollab-Kanal muss dabei mitwandern:** die Mitgliedszeile im Relay nennt die Sitzung,
+     die beigetreten ist, und `myJoinedCollabs()` filtert genau darauf — nach `/clear` wäre der
+     Kanal für den Client also weg (jedes Werkzeug verweigert, der Monitor lässt seine Ströme
+     fallen). Der Relay verschiebt die Zeile bei einem erneuten `accept` auf die neue ID; der
+     Monitor nimmt deshalb die Kanäle, die **diese Sitzung** hielt, nach dem Wechsel neu an. Nur
+     die: ein zweites Fenster kann im selben Kanal sein, und ein `accept` von hier zöge ihm die
+     Mitgliedschaft weg. Ein Kanal, der gerade erst beigetreten ist und dessen Strom noch nicht
+     steht, zählt mit (er war sonst genau in diesem Fenster still verloren).
    - **Nicht abgedeckt:** Nachrichten, die in der Zwischenzeit an die ALTE ID gingen, holt niemand
      nach. Ein Abfluss des alten Backlogs beim Wechsel wäre ein eigener Schritt.
 3. **`monitors`-Verfügbarkeit/Trust-Level:** Background-Monitore laufen laut Doku nur in
