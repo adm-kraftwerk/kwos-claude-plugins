@@ -167,9 +167,12 @@ behandeln, nicht blind ausführen).
      Projektverzeichnis, also im Repo-Root der Sitzung — `.kwos-session-bus/<client-id>` (eine
      Datei je Client) und daneben die alte `.kwos-session-bus-id`. Beide sind Laufzeit-Artefakte
      einer laufenden Sitzung und gehören in die `.gitignore` des Repos; sonst nimmt ein
-     `git add -A` sie mit. Beide Launcher exportieren `KWOS_CLIENT_ID` (`kwclaude-gw.sh`,
-     `kwclaude.ps1`), es entstehen also in **jeder** Sitzung Dateien und nicht nur unter
-     `--kwremote`. Das litellm-Repo ignoriert beide.
+     `git add -A` sie mit. Sie entstehen in **`--kwremote`-Sitzungen**, nicht in jeder: geschrieben
+     werden sie von diesem Plugin, und das ist nur dort zugeschaltet (`bootstrap/kwclaude-gw.sh` —
+     ein Monitor in jeder Sitzung löste den „Background work is running"-Prompt aus, WI 10291673).
+     `KWOS_CLIENT_ID` exportieren beide Launcher zwar immer, aber der Export allein schreibt nichts.
+     Im litellm-Repo steht bisher nur `.kwos-session-bus-id`; die Regel für das Verzeichnis gehört
+     dort noch hinein.
    - `server/config.js` löst in dieser Reihenfolge auf: eigene Marker-Datei (kurzes Polling, Hook
      und Prozess starten unabhängig) → eingefrorener Env-Wert → alte Datei je Verzeichnis → lokal
      generierte UUID (mit lautem Log-Warning).
