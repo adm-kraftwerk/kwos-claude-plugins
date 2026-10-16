@@ -15589,9 +15589,13 @@ var config2 = {
   // How often a long-running process re-reads its own marker. The file is a few bytes and the check
   // is one stat+read; 5s costs nothing and bounds how long a /clear can go unnoticed. Same interval
   // as CLAUDE_CODE_SESSION_ID_CHECK_MS in the launchers' world: the latency the reader feels.
-  sessionIdCheckMs: Number(process.env.KWOS_SESSION_ID_CHECK_MS || 5e3),
+  sessionIdCheckMs: readCheckInterval(process.env.KWOS_SESSION_ID_CHECK_MS),
   ttlMinutes: 30
 };
+function readCheckInterval(raw) {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 250 ? n : 5e3;
+}
 async function ensureSessionId() {
   if (!config2.sessionId) config2.sessionId = await resolveSessionId();
   return config2.sessionId;
@@ -16050,7 +16054,7 @@ async function main() {
     heartbeat().catch((err) => log.error("Heartbeat fehlgeschlagen.", { error: String(err) }));
   }, config2.heartbeatIntervalMs);
   heartbeatTimer.unref();
-  setInterval(async () => {
+  const rebindTimer = setInterval(async () => {
     let changed = false;
     try {
       changed = await refreshSessionId();
@@ -16066,6 +16070,7 @@ async function main() {
       log.error("Registrierung nach Session-Wechsel fehlgeschlagen.", { error: String(err) });
     }
   }, config2.sessionIdCheckMs);
+  rebindTimer.unref();
 }
 var isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (isMain) {

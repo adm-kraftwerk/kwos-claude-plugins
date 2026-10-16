@@ -233,9 +233,12 @@ async function main() {
   // send_message and the session_id of ask_remote. The SessionStart hook rewrites our marker, so
   // the marker is where the truth moves -- adopt it and re-register under the new id.
   //
-  // Not unref'd on purpose: this timer is a real handle for the life of the process, so the
-  // re-bind cannot be dropped while the stdio transport is idle. It ends with the session.
-  setInterval(async () => {
+  // Unref'd like the heartbeat above, and for the same reason: this process ends with its client.
+  // An open stdin is what holds it up while the session lives -- the timer only has to fire.
+  // Measured 2026-10-16: with this timer ref'd, the server outlived the closed stdin (the old
+  // bundle exited 47 ms after stdin close, this one was still alive 10 s later), and an orphan
+  // keeps its heartbeat firing, so the session never ages out of the PWA list.
+  const rebindTimer = setInterval(async () => {
     let changed = false;
     try {
       changed = await refreshSessionId();
@@ -251,6 +254,7 @@ async function main() {
       log.error("Registrierung nach Session-Wechsel fehlgeschlagen.", { error: String(err) });
     }
   }, config.sessionIdCheckMs);
+  rebindTimer.unref();
 
   // SSE-Empfang läuft nicht mehr hier, sondern als separater Background-Monitor
   // (monitors/monitors.json -> server/listen.js) — siehe Workitem-9831620-Kommentar
