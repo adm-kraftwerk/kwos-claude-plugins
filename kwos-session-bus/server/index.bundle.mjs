@@ -16570,14 +16570,25 @@ var server = new Server(
   { name: "kwos-session-bus", version: "0.4.2" },
   { capabilities: { tools: {} } }
 );
+var REMOTE_ONLY_TOOLS = /* @__PURE__ */ new Set(["ask_remote"]);
+function remoteActive(env = process.env) {
+  const flag = String(env.KWOS_REMOTE ?? "").trim().toLowerCase();
+  if (flag === "1" || flag === "true" || flag === "yes") return true;
+  return Boolean(String(env.KWOS_APPROVAL_TOKEN ?? "").trim());
+}
 function visibleTools(env = process.env) {
-  if (collabReleased(env)) return TOOLS;
-  return TOOLS.filter((t) => !t.name.startsWith(COLLAB_TOOL_PREFIX));
+  let tools = TOOLS;
+  if (!collabReleased(env)) tools = tools.filter((t) => !t.name.startsWith(COLLAB_TOOL_PREFIX));
+  if (!remoteActive(env)) tools = tools.filter((t) => !REMOTE_ONLY_TOOLS.has(t.name));
+  return tools;
 }
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: visibleTools() }));
 async function handleToolCall(name, args = {}) {
   if (name.startsWith(COLLAB_TOOL_PREFIX) && !collabReleased()) {
     throw new Error("Zusammenarbeit ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY).");
+  }
+  if (REMOTE_ONLY_TOOLS.has(name) && !remoteActive()) {
+    throw new Error(name + " gibt es nur in einer Remote-Control-Sitzung (--kwremote) -- dieser Mensch sitzt am Terminal, frag dort.");
   }
   switch (name) {
     case "list_sessions": {
@@ -16775,8 +16786,10 @@ if (isMain3) {
   });
 }
 export {
+  REMOTE_ONLY_TOOLS,
   TOOLS,
   callTool,
   handleToolCall,
+  remoteActive,
   visibleTools
 };

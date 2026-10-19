@@ -260,8 +260,36 @@ const server = new Server(
 );
 
 /**
+ * Die Werkzeuge, die NUR eine Remote-Control-Sitzung angeboten bekommt (2026-10-19, Befund Luca).
+ *
+ * WARUM: seit dem Kanal-Gate schaltet der Launcher dieses Plugin in JEDER freigegebenen Sitzung
+ * zu -- also auch ohne `--kwremote`. `ask_remote` fragt den Menschen per Push und BLOCKIERT bis zu
+ * ~9,5 Minuten. In einer Sitzung am Terminal wartet niemand, und die PWA ist gar nicht offen: die
+ * Rueckfrage lief ins Leere, jedes Mal. Ohne diesen Filter stand das Werkzeug dort nur mit seiner
+ * Beschreibung da ("fuer Momente, in denen niemand am Terminal sitzt") -- und die laedt genau dazu
+ * ein. Ein Name in der Werkzeugliste ist ein Versprechen (dieselbe Regel wie bei den Kanal-
+ * Werkzeugen oben).
+ */
+export const REMOTE_ONLY_TOOLS = new Set(["ask_remote"]);
+
+/**
+ * Ist Remote Control in DIESER Sitzung aktiv?
+ *
+ * Zwei Signale, in dieser Reihenfolge: der ausdrueckliche Schalter `KWOS_REMOTE=1`, den der
+ * Launcher fuer JEDEN `--kwremote`-Start exportiert (auch wenn das Approval-Token nicht kam), und
+ * als RUECKFALL das Approval-Token selbst -- ein Launcher, der aelter ist als diese Zeile, setzt
+ * nur das, und eine echte Remote-Sitzung darf durch das Update nicht ihr Werkzeug verlieren.
+ * Ohne beides ist die Sitzung NICHT remote.
+ */
+export function remoteActive(env = process.env) {
+  const flag = String(env.KWOS_REMOTE ?? "").trim().toLowerCase();
+  if (flag === "1" || flag === "true" || flag === "yes") return true;
+  return Boolean(String(env.KWOS_APPROVAL_TOKEN ?? "").trim());
+}
+
+/**
  * The tools a session is OFFERED -- everything except the channel's own, where the ring has not
- * released it.
+ * released it, and except the Remote-Control tools, where this session is not one.
  *
  * A filter and not merely a refusal (2026-10-19, WI 11506447): the tool list is the session's
  * picture of what this plugin can do, and `collab_status`, `collab_send`, `collab_accept`,
@@ -271,8 +299,10 @@ const server = new Server(
  * rule as the monitor entry (s. collab-listen.js's header): what is not released is not announced.
  */
 export function visibleTools(env = process.env) {
-  if (collabReleased(env)) return TOOLS;
-  return TOOLS.filter((t) => !t.name.startsWith(COLLAB_TOOL_PREFIX));
+  let tools = TOOLS;
+  if (!collabReleased(env)) tools = tools.filter((t) => !t.name.startsWith(COLLAB_TOOL_PREFIX));
+  if (!remoteActive(env)) tools = tools.filter((t) => !REMOTE_ONLY_TOOLS.has(t.name));
+  return tools;
 }
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: visibleTools() }));
@@ -289,6 +319,12 @@ export async function handleToolCall(name, args = {}) {
   // cannot tell which of the two surfaces answered.
   if (name.startsWith(COLLAB_TOOL_PREFIX) && !collabReleased()) {
     throw new Error("Zusammenarbeit ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY).");
+  }
+  // The same rule on the DOING side (Befund Luca 2026-10-19): a session that kept an old tool list
+  // -- or names the tool from what it read somewhere -- must not spend 9,5 minutes asking a phone
+  // nobody is looking at. The refusal names the way out, so the model can act on it.
+  if (REMOTE_ONLY_TOOLS.has(name) && !remoteActive()) {
+    throw new Error(name + " gibt es nur in einer Remote-Control-Sitzung (--kwremote) -- dieser Mensch sitzt am Terminal, frag dort.");
   }
   switch (name) {
     case "list_sessions": {

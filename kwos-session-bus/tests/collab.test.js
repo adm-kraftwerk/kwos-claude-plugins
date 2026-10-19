@@ -338,6 +338,57 @@ test("collabReleased: dieselben Schreibweisen wie der Launcher, NO schlaegt alle
   assert.equal(collabReleased({ KWOS_COLLAB_CANARY: "0", KWOS_NO_COLLAB: "" }), false);
 });
 
+// ── NUR EINE REMOTE-SITZUNG BEKOMMT DIE REMOTE-WERKZEUGE ──────────────────────────────────────
+// Befund 2026-10-19 (Luca): seit dem Kanal-Gate haengt das Plugin an JEDER freigegebenen Sitzung,
+// also auch ohne --kwremote -- und `ask_remote` fragte dann per Push und blockierte bis zu 9,5
+// Minuten, waehrend der Mensch am Terminal sass und die PWA gar nicht offen hatte. Ein Name in der
+// Werkzeugliste ist ein Versprechen; dieses wird hier nicht mehr gegeben (und die Handlung darunter
+// ebenfalls abgewiesen).
+test("remoteActive: KWOS_REMOTE gewinnt, das Approval-Token ist der Rueckfall", async () => {
+  const { remoteActive } = await import("../server/index.js");
+  for (const v of ["1", "true", "yes", "YES", " 1 "]) {
+    assert.equal(remoteActive({ KWOS_REMOTE: v }), true, JSON.stringify(v));
+  }
+  // Ein Launcher, der aelter ist als KWOS_REMOTE, setzt nur das Token -- eine ECHTE Remote-Sitzung
+  // darf ihr Werkzeug nicht durch dieses Update verlieren.
+  assert.equal(remoteActive({ KWOS_APPROVAL_TOKEN: "tok" }), true);
+  for (const env of [{}, { KWOS_REMOTE: "" }, { KWOS_REMOTE: "0" }, { KWOS_REMOTE: "no" },
+    { KWOS_APPROVAL_TOKEN: "" }, { KWOS_APPROVAL_TOKEN: "   " }]) {
+    assert.equal(remoteActive(env), false, JSON.stringify(env));
+  }
+});
+
+test("visibleTools: ask_remote steht NUR in einer Remote-Sitzung in der Liste", async () => {
+  const { visibleTools } = await import("../server/index.js");
+  const names = (env) => visibleTools(env).map((t) => t.name);
+  assert.ok(!names({ KWOS_COLLAB_CANARY: "1" }).includes("ask_remote"),
+    "Kanal frei, aber nicht remote: ask_remote darf nicht angeboten werden");
+  assert.ok(names({ KWOS_COLLAB_CANARY: "1", KWOS_REMOTE: "1" }).includes("ask_remote"));
+  assert.ok(names({ KWOS_APPROVAL_TOKEN: "tok" }).includes("ask_remote"));
+  // Die Sperre trifft genau eines: die uebrigen Werkzeuge bleiben, wo sie waren, und das
+  // Kanal-Gate besteht daneben unveraendert.
+  assert.ok(names({}).includes("list_sessions"));
+  assert.ok(!names({}).includes("collab_status"), "Kanal ohne Ring bleibt verborgen");
+  assert.ok(names({ KWOS_COLLAB_CANARY: "1" }).includes("collab_status"));
+});
+
+test("handleToolCall: ask_remote wird auch dann abgewiesen, wenn jemand es nennt", async () => {
+  const { handleToolCall } = await import("../server/index.js");
+  // Der Prozess darf auf dem Testrechner keine Remote-Variable tragen (dieselbe Falle wie beim
+  // Default-Pfad von collabReleased oben).
+  const saved = { ...process.env };
+  try {
+    delete process.env.KWOS_REMOTE;
+    delete process.env.KWOS_APPROVAL_TOKEN;
+    await assert.rejects(() => handleToolCall("ask_remote", { question: "x" }),
+      /nur in einer Remote-Control-Sitzung/);
+  } finally {
+    for (const k of ["KWOS_REMOTE", "KWOS_APPROVAL_TOKEN"]) {
+      if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+    }
+  }
+});
+
 test("collabReleased: der Monitor startet gar nicht erst, wenn der Ring ihn nicht kennt", async () => {
   const { readFile } = await import("node:fs/promises");
   const src = await readFile(new URL("../server/collab-listen.js", import.meta.url), "utf8");
@@ -373,7 +424,14 @@ test("visibleTools: ohne Freigabe kein einziges collab_*-Werkzeug, mit Freigabe 
   }
 
   for (const env of [{ KWOS_COLLAB_CANARY: "1" }, { KWOS_COLLAB_CANARY: "yes" }]) {
-    assert.deepEqual(names(visibleTools(env)), names(TOOLS), JSON.stringify(env));
+    // ALLE Kanal-Werkzeuge -- und nicht mehr "die ganze Liste": seit 2026-10-19 haengt
+    // `ask_remote` an einem ZWEITEN Gate (Remote Control, s. die Pruefung darunter), und diese
+    // Zusicherung hier gilt dem Kanal-Gate.
+    assert.deepEqual(
+      names(visibleTools(env)).filter((n) => n.startsWith("collab_")).sort(),
+      collabNames.slice().sort(),
+      JSON.stringify(env)
+    );
   }
 });
 
