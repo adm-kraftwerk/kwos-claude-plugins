@@ -389,6 +389,43 @@ test("handleToolCall: ask_remote wird auch dann abgewiesen, wenn jemand es nennt
   }
 });
 
+test("der Monitor lebt weiter, wenn kein Kanal offen ist (Regression: Exit 0 kurz nach dem Start)", async () => {
+  // Gemessen 2026-10-19 (tgoebel, forkmann): der Kanal-Empfaenger beendete sich unmittelbar nach
+  // dem Start mit Exit 0 und ohne eine Zeile -- beide Timer waren `unref()`-t, ein offener
+  // SSE-Strom war noch nicht da, und ein haengendes Promise haelt Node nicht am Leben. Die
+  // Harness-Ankuendigung stand damit fuer einen Prozess, der schon tot war.
+  // Geprueft wird die ECHTE Einstiegsdatei aus monitors/monitors.json, als Prozess: die Datei,
+  // die die Sitzung bekommt -- nicht ein nachgebautes Modul.
+  const { spawn } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const child = spawn(process.execPath, ["server/monitor.js"], {
+    cwd: root,
+    env: {
+      ...process.env,
+      KWOS_COLLAB_CANARY: "1",                 // der Ring ist offen
+      CLAUDE_CODE_SESSION_ID: "s-live-test",   // Session-ID ohne Marker-Datei
+      KWOS_RELAY_URL: "http://127.0.0.1:9",    // kein Relay: der Poll scheitert sofort
+      KWOS_COLLAB_POLL_MS: "60000",            // und pollt dann nicht im Sekundentakt
+    },
+    // stdin als OFFENE Pipe: genau so startet der Harness den Monitor, und genau das ist der
+    // Anker, an dem der Prozess haengt (s. collab-listen.js). Mit "ignore" waere stdin sofort am
+    // Ende -- der Test wuerde dann die Attrappe pruefen statt die Sitzung.
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let out = "";
+  child.stdout.on("data", (b) => { out += String(b); });
+  child.stderr.on("data", (b) => { out += String(b); });
+  try {
+    // Ohne die Reparatur endet der Prozess in Millisekunden; 1,5 s sind reichlich Luft.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    assert.equal(child.exitCode, null,
+      `der Monitor ist beendet (Exit ${child.exitCode}): ${out.slice(-400)}`);
+  } finally {
+    child.kill("SIGTERM");
+  }
+});
+
 test("collabReleased: der Monitor startet gar nicht erst, wenn der Ring ihn nicht kennt", async () => {
   const { readFile } = await import("node:fs/promises");
   const src = await readFile(new URL("../server/collab-listen.js", import.meta.url), "utf8");

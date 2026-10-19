@@ -149,6 +149,26 @@ export async function startCollabListener({ writeLine, env = process.env } = {})
   const stop = () => { stopping = true; signalEnded(); };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+  // WER HAELT DIESEN PROZESS AM LEBEN? Die Sitzung -- und zwar ueber ihr stdin.
+  //
+  // Gemessen am 2026-10-19 (tgoebel, forkmann): der Prozess endete unmittelbar nach dem Start mit
+  // Exit 0 und ohne eine Zeile. Die beiden Timer sind absichtlich `unref`'t (Review-Fund Kai,
+  // 2026-10-16: ein referenzierter Takt fragte als Waise alle 15 s weiter), und ein PAUSIERTES
+  // stdin haelt in Node NICHTS -- der fruehere Kommentar "das offene stdin haelt ihn schon" galt
+  // nur, solange es niemand liest. Ohne offenen Kanal gibt es danach keinen Strom, kein Timer und
+  // keinen Handle: die Ereignisschleife ist leer, und die Harness-Ankuendigung stand fuer einen
+  // Prozess, der schon tot war.
+  //
+  // `resume()` macht das stdin zu genau dem Anker, der hier gebraucht wird: es haelt den Prozess,
+  // SOLANGE die Sitzung laeuft, und es endet mit ihr -- der Harness schliesst die Pipe, `end`
+  // kommt an, `stop()` raeumt auf. Damit bleibt Kai's Regel bestehen (kein referenzierter Takt,
+  // keine Waise) UND der Prozess wartet wirklich auf spaetere Nachrichten.
+  try {
+    process.stdin.resume();
+    process.stdin.on("end", stop);
+    process.stdin.on("close", stop);
+    process.stdin.on("error", stop);
+  } catch { /* kein stdin (Sonderfaelle/Windows): dann haelt der Aufrufer den Prozess */ }
 
   // One stream per channel, keyed by collab id. Kept across polls, so a channel we are already in
   // is not re-opened every 15 s (that would replay the backlog again and again).
@@ -281,6 +301,9 @@ export async function startCollabListener({ writeLine, env = process.env } = {})
   const running = (async () => {
     await poll();
     pollTimer = setInterval(() => { poll().catch(() => {}); }, COLLAB_POLL_MS);
+    // `unref` bleibt (Review-Fund Kai, s. den Test): der Takt soll den Prozess NICHT ueber die
+    // Sitzung hinaus am Leben halten. Was ihn haelt, ist das abonnierte stdin oben -- ein Punkt,
+    // den die Sitzung selbst beendet.
     pollTimer.unref();
     await ended;
   })()

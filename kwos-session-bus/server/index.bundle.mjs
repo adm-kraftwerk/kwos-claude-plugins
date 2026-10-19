@@ -16265,6 +16265,13 @@ async function startCollabListener({ writeLine, env = process.env } = {}) {
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+  try {
+    process.stdin.resume();
+    process.stdin.on("end", stop);
+    process.stdin.on("close", stop);
+    process.stdin.on("error", stop);
+  } catch {
+  }
   const open = /* @__PURE__ */ new Map();
   const closeAll = () => {
     for (const [id, entry] of open) {
