@@ -15994,6 +15994,7 @@ function collabEventsUrl(collabId) {
 
 // server/collab-listen.js
 import { fileURLToPath as fileURLToPath2 } from "node:url";
+import { fstatSync } from "node:fs";
 
 // server/sse-receiver.js
 import { Readable } from "node:stream";
@@ -16230,6 +16231,14 @@ function collabReleased(env = process.env) {
   const v = String(env?.KWOS_COLLAB_CANARY ?? "").trim().toLowerCase();
   return v === "1" || v === "true" || v === "yes";
 }
+function stdinIsChannel(fd = 0) {
+  try {
+    const st = fstatSync(fd);
+    return st.isFIFO() || st.isSocket();
+  } catch {
+    return false;
+  }
+}
 function frameToLine(raw, { members = [], selfSessionId = null, collabId = null } = {}) {
   let msg;
   try {
@@ -16248,7 +16257,7 @@ function frameToLine(raw, { members = [], selfSessionId = null, collabId = null 
     attachmentId: msg.attachment_id
   });
 }
-async function startCollabListener({ writeLine, env = process.env } = {}) {
+async function startCollabListener({ writeLine, env = process.env, stdin = process.stdin, isChannel = stdinIsChannel } = {}) {
   if (!collabReleased(env)) {
     log.info("kwcollab ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY) -- kein Empfang.");
     return null;
@@ -16266,10 +16275,16 @@ async function startCollabListener({ writeLine, env = process.env } = {}) {
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
   try {
-    process.stdin.resume();
-    process.stdin.on("end", stop);
-    process.stdin.on("close", stop);
-    process.stdin.on("error", stop);
+    stdin.resume?.();
+    if (isChannel()) {
+      stdin.on("end", stop);
+      stdin.on("close", stop);
+      stdin.on("error", stop);
+    } else {
+      stdin.on("error", () => {
+      });
+      log.info("stdin ist kein Kanal (/dev/null) -- der Kollab-Empfang lebt mit dem Prozess, nicht mit stdin.");
+    }
   } catch {
   }
   const open = /* @__PURE__ */ new Map();
