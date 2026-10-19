@@ -16239,7 +16239,7 @@ function frameToLine(raw, { members = [], selfSessionId = null, collabId = null 
   }
   if (!msg || typeof msg !== "object") return null;
   if (!msg.seq) return msg.collab_id ? collabClosedLine(msg.collab_id) : null;
-  if (selfSessionId && msg.from_session === selfSessionId) return null;
+  if (selfSessionId && msg.from_session === selfSessionId && msg.author_kind !== "human") return null;
   return collabLine({
     collabId: msg.collab_id || collabId,
     from: senderName(msg, members),

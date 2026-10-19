@@ -25,9 +25,15 @@
 // listen.js). The line format lives in collabLine.js -- it is the contract with the prompt
 // fragment that tells Claude these lines are FOREIGN DATA.
 //
-// Deliberately NOT fed back: anything this session itself sent. The relay replays up to 500
+// Deliberately NOT fed back: anything this session's AGENT itself sent. The relay replays up to 500
 // backlog frames on reconnect (relay/server.js), and our own messages are in that backlog -- a
 // monitor that hands them back to Claude would answer its own message, forever.
+//
+// AND ONLY THE AGENT's, not everything that carries this session's id: a HUMAN message written in
+// the channel view of this very pane comes back stamped with this session (it went through this
+// server), and it is exactly the message the session is supposed to receive. Without the
+// `author_kind` in the filter below, a person cannot reach their own session through its channel at
+// all -- measured 2026-10-19 (tgoebel), the one way the channel is actually used.
 
 import { fileURLToPath } from "node:url";
 import { config, ensureSessionId, refreshSessionId, readCheckInterval } from "./config.js";
@@ -95,7 +101,9 @@ export function frameToLine(raw, { members = [], selfSessionId = null, collabId 
   if (!msg || typeof msg !== "object") return null;
   // The channel's own lifecycle event (relay: `event: closed`, data { collab_id }).
   if (!msg.seq) return msg.collab_id ? collabClosedLine(msg.collab_id) : null;
-  if (selfSessionId && msg.from_session === selfSessionId) return null;
+  // The session id alone is NOT enough (s. the file header): the relay stamps a HUMAN message from
+  // this pane's channel view with THIS session's id. Only the agent's own contributions go back.
+  if (selfSessionId && msg.from_session === selfSessionId && msg.author_kind !== "human") return null;
   // A message without text is a valid case (a screenshot speaks for itself) -- collabLine names
   // the attachment then.
   return collabLine({
