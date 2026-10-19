@@ -36,6 +36,7 @@
 // all -- measured 2026-10-19 (tgoebel), the one way the channel is actually used.
 
 import { fileURLToPath } from "node:url";
+import { fstatSync } from "node:fs";
 import { config, ensureSessionId, refreshSessionId, readCheckInterval } from "./config.js";
 import { log } from "./log.js";
 import { runSseReceiver } from "./sse-receiver.js";
@@ -90,6 +91,23 @@ export function collabReleased(env = process.env) {
 }
 
 /**
+ * Is stdin a CHANNEL that the session really holds -- a pipe or a socket?
+ *
+ * Only then may its EOF mean "the session is over" (see the stdin block in `startCollabListener`).
+ * Claude Code starts a plugin monitor with `stdin = /dev/null` (measured 2026-10-19: the spawn
+ * line in `ps` ends in `< /dev/null`), and reading that gives EOF immediately -- so a binding that
+ * stopped the receive path on `end` stopped it milliseconds after it had opened its stream. The fd
+ * itself answers the question: a character device (the null device, a terminal) is not a channel
+ * the session keeps open, a FIFO or a socket is.
+ */
+export function stdinIsChannel(fd = 0) {
+  try {
+    const st = fstatSync(fd);
+    return st.isFIFO() || st.isSocket();
+  } catch { return false; }
+}
+
+/**
  * One SSE frame -> the line to print, or null when it must NOT be printed.
  *
  * Null for our own messages (see the file header) and for anything unreadable: a monitor that
@@ -129,8 +147,12 @@ export function frameToLine(raw, { members = [], selfSessionId = null, collabId 
  * is the caller's job too -- it belongs to the writer.
  *
  * `ended` resolves when the receive path is fully down (timers cleared, streams closed).
+ *
+ * `stdin` and `isChannel` are the seam for the one case a test cannot build for itself: the harness
+ * hands this process `/dev/null` (s. the stdin block below), and a test cannot make its OWN stdin
+ * the null device. A double that emits `end` the moment it is resumed is what `/dev/null` does.
  */
-export async function startCollabListener({ writeLine, env = process.env } = {}) {
+export async function startCollabListener({ writeLine, env = process.env, stdin = process.stdin, isChannel = stdinIsChannel } = {}) {
   // The ring decides (s. collabReleased): outside it this receive path does not run at all -- no
   // poll, no stream, no line. Logged once, because "the channel is silent" and "the channel was
   // never switched on here" look identical from inside a session.
@@ -149,25 +171,39 @@ export async function startCollabListener({ writeLine, env = process.env } = {})
   const stop = () => { stopping = true; signalEnded(); };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
-  // WER HAELT DIESEN PROZESS AM LEBEN? Die Sitzung -- und zwar ueber ihr stdin.
+  // WHO KEEPS THIS PROCESS ALIVE -- and who may end it (measured 2026-10-19).
   //
-  // Gemessen am 2026-10-19 (tgoebel, forkmann): der Prozess endete unmittelbar nach dem Start mit
-  // Exit 0 und ohne eine Zeile. Die beiden Timer sind absichtlich `unref`'t (Review-Fund Kai,
-  // 2026-10-16: ein referenzierter Takt fragte als Waise alle 15 s weiter), und ein PAUSIERTES
-  // stdin haelt in Node NICHTS -- der fruehere Kommentar "das offene stdin haelt ihn schon" galt
-  // nur, solange es niemand liest. Ohne offenen Kanal gibt es danach keinen Strom, kein Timer und
-  // keinen Handle: die Ereignisschleife ist leer, und die Harness-Ankuendigung stand fuer einen
-  // Prozess, der schon tot war.
+  // The process used to die right after the start (exit 0, not one line: measured 2026-10-19,
+  // tgoebel/forkmann). Both timers are unref'd on purpose (review finding Kai, 2026-10-16: a
+  // referenced tick kept polling the relay as an orphan), and a PAUSED stdin holds nothing in
+  // Node -- so with no stream and no timer there was no handle at all and the loop was empty.
   //
-  // `resume()` macht das stdin zu genau dem Anker, der hier gebraucht wird: es haelt den Prozess,
-  // SOLANGE die Sitzung laeuft, und es endet mit ihr -- der Harness schliesst die Pipe, `end`
-  // kommt an, `stop()` raeumt auf. Damit bleibt Kai's Regel bestehen (kein referenzierter Takt,
-  // keine Waise) UND der Prozess wartet wirklich auf spaetere Nachrichten.
+  // The repair bound the process to stdin (`resume()`, then `end`/`close` -> `stop()`), on the
+  // assumption that the session holds that pipe open and closes it at the end. That assumption is
+  // wrong for the way the harness actually starts a plugin monitor: the spawn line ends in
+  // `< /dev/null` (measured in `ps`), so the EOF arrives AT ONCE -- `end` fired before the first
+  // poll came back, `stop()` resolved `ended`, and the teardown cleared the poll timer and aborted
+  // every stream a moment after it had opened. The channel then looked dead inside the session
+  // while every surface still showed it (the message is in the relay's table, and the overview
+  // reads that table). The monitor process itself lived on, because the relay path holds it -- so
+  // nothing looked broken.
+  //
+  // Only a real channel may decide that the session is over: `stdinIsChannel()` tells a pipe or a
+  // socket from the null device, so `resume()` still anchors the standalone entry where something
+  // really holds it, and `/dev/null` never ends the receive path. In the composed monitor the
+  // caller owns this process anyway (`server/monitor.js` stops this path after `relay.ended`).
   try {
-    process.stdin.resume();
-    process.stdin.on("end", stop);
-    process.stdin.on("close", stop);
-    process.stdin.on("error", stop);
+    stdin.resume?.();
+    if (isChannel()) {
+      stdin.on("end", stop);
+      stdin.on("close", stop);
+      stdin.on("error", stop);
+    } else {
+      // Not our anchor: the caller owns the process, and a read error on a stdin we do not use
+      // must not end the receive path either -- an unhandled 'error' would take the monitor down.
+      stdin.on("error", () => {});
+      log.info("stdin ist kein Kanal (/dev/null) -- der Kollab-Empfang lebt mit dem Prozess, nicht mit stdin.");
+    }
   } catch { /* kein stdin (Sonderfaelle/Windows): dann haelt der Aufrufer den Prozess */ }
 
   // One stream per channel, keyed by collab id. Kept across polls, so a channel we are already in
