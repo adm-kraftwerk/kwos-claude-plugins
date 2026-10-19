@@ -21,9 +21,10 @@
 // about it may be announced: this path rides along in the listener those sessions already have,
 // and `collabReleased` decides whether it is started at all.
 //
-// One line per message on stdout, diagnostics on stderr (the convention of this plugin, s.
-// listen.js). The line format lives in collabLine.js -- it is the contract with the prompt
-// fragment that tells Claude these lines are FOREIGN DATA.
+// One message becomes one or more lines on stdout, diagnostics on stderr (the convention of this
+// plugin, s. listen.js). A long message is split, not cut (collabLine.js::collabLines). The line
+// format lives in collabLine.js -- it is the contract with the prompt fragment that tells Claude
+// these lines are FOREIGN DATA, which is why every part repeats the "[kwcollab" head.
 //
 // Deliberately NOT fed back: anything this session's AGENT itself sent. The relay replays up to 500
 // backlog frames on reconnect (relay/server.js), and our own messages are in that backlog -- a
@@ -41,7 +42,7 @@ import { config, ensureSessionId, refreshSessionId, readCheckInterval } from "./
 import { log } from "./log.js";
 import { runSseReceiver } from "./sse-receiver.js";
 import { createLineWriter } from "./listen.js";
-import { collabLine, collabClosedLine, senderName } from "./collabLine.js";
+import { collabLines, collabClosedLine, senderName } from "./collabLine.js";
 import * as collab from "./collab.js";
 
 // How often the monitor asks which channels this session is in. Short enough that joining feels
@@ -108,7 +109,12 @@ export function stdinIsChannel(fd = 0) {
 }
 
 /**
- * One SSE frame -> the line to print, or null when it must NOT be printed.
+ * One SSE frame -> the lines to print, or null when it must NOT be printed.
+ *
+ * A long message yields SEVERAL lines (collabLine.js::collabLines): the harness cuts every
+ * notification line at ~500 characters, and a channel message can carry up to 8000. Splitting keeps
+ * the whole message in the session; cutting used to lose the tail of exactly the messages that
+ * mattered (a seed and a move).
  *
  * Null for our own messages (see the file header) and for anything unreadable: a monitor that
  * prints a guess would put invented words into the session.
@@ -118,13 +124,13 @@ export function frameToLine(raw, { members = [], selfSessionId = null, collabId 
   try { msg = JSON.parse(raw); } catch { return null; }
   if (!msg || typeof msg !== "object") return null;
   // The channel's own lifecycle event (relay: `event: closed`, data { collab_id }).
-  if (!msg.seq) return msg.collab_id ? collabClosedLine(msg.collab_id) : null;
+  if (!msg.seq) return msg.collab_id ? [collabClosedLine(msg.collab_id)] : null;
   // The session id alone is NOT enough (s. the file header): the relay stamps a HUMAN message from
   // this pane's channel view with THIS session's id. Only the agent's own contributions go back.
   if (selfSessionId && msg.from_session === selfSessionId && msg.author_kind !== "human") return null;
-  // A message without text is a valid case (a screenshot speaks for itself) -- collabLine names
+  // A message without text is a valid case (a screenshot speaks for itself) -- collabLines names
   // the attachment then.
-  return collabLine({
+  return collabLines({
     collabId: msg.collab_id || collabId,
     from: senderName(msg, members),
     kind: msg.author_kind,
@@ -266,10 +272,13 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
       log.info("Collab-Kanal verbunden.", { collabId: c.collab_id, workitem: c.workitem });
       runSseReceiver(
         (raw) => {
-          const line = frameToLine(raw, {
+          const lines = frameToLine(raw, {
             members: entry.members, selfSessionId: config.sessionId, collabId: c.collab_id,
           });
-          if (line) writeLine(line);
+          if (!lines || lines.length === 0) return;
+          // One frame, several lines: the writer spaces them apart, so each part reaches the
+          // session as its own notification instead of being bundled and cut.
+          for (const line of lines) writeLine(line);
         },
         { signal: controller.signal, url: collab.collabEventsUrl(c.collab_id) }
       ).catch((err) => {

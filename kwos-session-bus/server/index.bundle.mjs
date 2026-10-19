@@ -16200,19 +16200,63 @@ if (isMain) {
 // server/collabLine.js
 var COLLAB_LINE_PREFIX = "[kwcollab";
 var COLLAB_KINDS = ["human", "claude", "system"];
+var MIN_CHUNK_CHARS = 32;
 function collabShortId(collabId) {
   return String(collabId || "").split("-")[0];
 }
-function collabLine({ collabId, from, kind, text, attachmentId, maxChars = MAX_LINE_CHARS }) {
+function headOf(collabId, from, kind) {
   const who = typeof from === "string" && from.trim() ? from.trim() : "?";
   const authorKind = COLLAB_KINDS.includes(kind) ? kind : "claude";
+  return `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)} | ${who} | ${authorKind}] `;
+}
+function bodyOf(text, attachmentId) {
   let body = typeof text === "string" ? text.trim() : "";
   if (!body && attachmentId) body = `[Anhang: mit collab_get_attachment ${attachmentId} abrufbar]`;
-  const head = `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)} | ${who} | ${authorKind}] `;
+  return body.replace(/[\u0000-\u001f\u007f]+/g, " ");
+}
+function cutAt(str, limit) {
+  if (str.length <= limit) return str;
+  let end = Math.max(0, limit);
+  const code = str.charCodeAt(end - 1);
+  if (code >= 55296 && code <= 56319) end -= 1;
+  return str.slice(0, end);
+}
+function splitBody(body, capacity) {
+  if (capacity < MIN_CHUNK_CHARS) return null;
+  const parts = [];
+  let current = "";
+  for (const cp of Array.from(body)) {
+    if (current.length > 0 && current.length + cp.length > capacity) {
+      if (current.endsWith("\\")) {
+        parts.push(current.slice(0, -1));
+        current = "\\";
+      } else {
+        parts.push(current);
+        current = "";
+      }
+    }
+    current += cp;
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+function collabLines({ collabId, from, kind, text, attachmentId, maxChars = MAX_LINE_CHARS }) {
+  const head = headOf(collabId, from, kind);
+  const body = bodyOf(text, attachmentId);
+  if (head.length + body.length <= maxChars) return [head + body];
+  const maxParts = Math.max(1, Math.ceil(body.length / MIN_CHUNK_CHARS));
+  const suffix = `(${maxParts}/${maxParts}) `.length;
+  const parts = splitBody(body, maxChars - head.length - suffix);
+  if (!parts) return [collabLine({ collabId, from, kind, text, attachmentId, maxChars })];
+  return parts.map((part, i) => `${head}(${i + 1}/${parts.length}) ${part}`);
+}
+function collabLine({ collabId, from, kind, text, attachmentId, maxChars = MAX_LINE_CHARS }) {
+  const head = headOf(collabId, from, kind);
+  const body = bodyOf(text, attachmentId);
   if (head.length + body.length <= maxChars) return head + body;
-  const marker = `\u2026 [gek\xFCrzt, ${body.length} Zeichen]`;
-  const keep = Math.max(0, maxChars - head.length - marker.length);
-  return `${head}${body.slice(0, keep)}${marker}`.slice(0, maxChars);
+  const marker = `\u2026 [gek\xFCrzt, Rest fehlt: ${body.length} Zeichen gesamt]`;
+  const chosen = marker.length < maxChars ? marker : "\u2026 [gek\xFCrzt]";
+  return `${cutAt(`${head}${body}`, maxChars - chosen.length)}${chosen}`;
 }
 function collabClosedLine(collabId) {
   return `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)} | system] Kanal beendet -- Protokoll auf dem Server geloescht.`;
@@ -16247,9 +16291,9 @@ function frameToLine(raw, { members = [], selfSessionId = null, collabId = null 
     return null;
   }
   if (!msg || typeof msg !== "object") return null;
-  if (!msg.seq) return msg.collab_id ? collabClosedLine(msg.collab_id) : null;
+  if (!msg.seq) return msg.collab_id ? [collabClosedLine(msg.collab_id)] : null;
   if (selfSessionId && msg.from_session === selfSessionId && msg.author_kind !== "human") return null;
-  return collabLine({
+  return collabLines({
     collabId: msg.collab_id || collabId,
     from: senderName(msg, members),
     kind: msg.author_kind,
@@ -16332,12 +16376,13 @@ async function startCollabListener({ writeLine, env = process.env, stdin = proce
       log.info("Collab-Kanal verbunden.", { collabId: c.collab_id, workitem: c.workitem });
       runSseReceiver(
         (raw) => {
-          const line = frameToLine(raw, {
+          const lines = frameToLine(raw, {
             members: entry.members,
             selfSessionId: config2.sessionId,
             collabId: c.collab_id
           });
-          if (line) writeLine(line);
+          if (!lines || lines.length === 0) return;
+          for (const line of lines) writeLine(line);
         },
         { signal: controller.signal, url: collabEventsUrl(c.collab_id) }
       ).catch((err) => {
