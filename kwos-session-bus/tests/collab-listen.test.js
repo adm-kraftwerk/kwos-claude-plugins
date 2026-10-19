@@ -123,7 +123,18 @@ test("stdinIsChannel: ein Socket ist ein Kanal, eine Datei und ein totes fd sind
     const fd = client._handle?.fd;
     // Kein stilles Ueberspringen: aendert Node den Zugriff auf das fd, soll dieser Test FALLEN.
     assert.equal(typeof fd, "number", "Socket-fd nicht lesbar -- Testannahme pruefen");
-    assert.equal(stdinIsChannel(fd), true, "ein Socket IST ein Kanal");
+    // WINDOWS KANN DIESEN FALL NICHT BAUEN (gemessen 2026-10-19): dort ist der "fd" eines
+    // TCP-Sockets **-1** -- ein Handle, kein CRT-Deskriptor --, und `fstat` wirft darauf
+    // ERR_OUT_OF_RANGE, also antwortet die Regel `false`. Auf POSIX ist es ein echter Deskriptor
+    // und die Antwort `true`. Der Unterschied gehoert der PLATTFORM, nicht der Regel: die Regel
+    // selbst deckt der Fall darunter ab (`isChannel`-Naht des Doppels), und in Produktion fragt
+    // sie nach `stdin` -- dort ist die Antwort auf beiden Seiten dieselbe (NUL/`/dev/null` ist ein
+    // Character-Device, also kein Kanal).
+    if (process.platform === "win32") {
+      assert.equal(stdinIsChannel(fd), false, "Windows: ein Socket hat dort keinen lesbaren fd");
+    } else {
+      assert.equal(stdinIsChannel(fd), true, "ein Socket IST ein Kanal");
+    }
   } finally { client.destroy(); server.close(); }
 });
 
