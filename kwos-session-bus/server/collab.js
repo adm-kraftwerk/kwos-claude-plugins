@@ -98,17 +98,19 @@ export async function collabDetail(collabId) {
 }
 
 /**
- * POST /v1/collabs/{id}/messages -- CLAUDE speaks (author_kind "claude").
+ * POST /v1/collabs/{id}/messages -- this session speaks.
  *
- * The relay pauses the channel after ten claude messages in a row without a human (spec:
- * ping-pong protection) and answers 409. That is not an error to retry: the tool text says so.
+ * The KIND is what the other side reads. "claude" is the agent's own sentence, "human" is the
+ * person's. `collab_send` passes the human's own words on with `fromHuman: true`, because the pause
+ * counter counts agent messages in a row without a human and a relayed order IS the human speaking.
+ * The relay trusts the caller for this kind, so the flag says what the input was, it grants nothing.
  */
-export async function sendCollabMessage(collabId, text, attachmentId = null) {
+export async function sendCollabMessage(collabId, text, attachmentId = null, fromHuman = false) {
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages`, {
     method: "POST",
     body: {
       text: text ?? "",
-      author_kind: "claude",
+      author_kind: fromHuman ? "human" : "claude",
       session_id: config.sessionId,
       ...(attachmentId ? { attachment_id: attachmentId } : {}),
     },
