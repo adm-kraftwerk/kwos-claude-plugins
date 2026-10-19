@@ -40,6 +40,7 @@ import { fstatSync } from "node:fs";
 import { config, ensureSessionId, refreshSessionId, readCheckInterval } from "./config.js";
 import { log } from "./log.js";
 import { runSseReceiver } from "./sse-receiver.js";
+import { readCursor, rememberCursor } from "./collabCursor.js";
 import { createLineWriter } from "./listen.js";
 import { collabLine, collabClosedLine, senderName } from "./collabLine.js";
 import * as collab from "./collab.js";
@@ -113,12 +114,24 @@ export function stdinIsChannel(fd = 0) {
  * Null for our own messages (see the file header) and for anything unreadable: a monitor that
  * prints a guess would put invented words into the session.
  */
-export function frameToLine(raw, { members = [], selfSessionId = null, collabId = null } = {}) {
+/** The seq of one frame, 0 when it carries none (the lifecycle event does not). */
+function seqOf(raw) {
+  try {
+    const msg = JSON.parse(raw);
+    return Number(msg?.seq) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function frameToLine(raw, { members = [], selfSessionId = null, collabId = null, after = 0 } = {}) {
   let msg;
   try { msg = JSON.parse(raw); } catch { return null; }
   if (!msg || typeof msg !== "object") return null;
   // The channel's own lifecycle event (relay: `event: closed`, data { collab_id }).
   if (!msg.seq) return msg.collab_id ? collabClosedLine(msg.collab_id) : null;
+  // Already printed: a frame that arrives twice must not become two lines in the session.
+  if (Number(msg.seq) <= Number(after)) return null;
   // The session id alone is NOT enough (s. the file header): the relay stamps a HUMAN message from
   // this pane's channel view with THIS session's id. Only the agent's own contributions go back.
   if (selfSessionId && msg.from_session === selfSessionId && msg.author_kind !== "human") return null;
@@ -261,17 +274,39 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
         continue;
       }
       const controller = new AbortController();
-      const entry = { controller, members };
+      // `lastSeq` is the SSE cursor (written to disk, advanced by every id). `printedSeq` is what
+      // the session has already SEEN, and only a printed line advances it: the id arrives before
+      // the message, so deduplicating against the cursor would swallow the frame it belongs to.
+      const entry = { controller, members, lastSeq: readCursor(c.collab_id) ?? 0 };
+      entry.printedSeq = entry.lastSeq;
       open.set(c.collab_id, entry);
       log.info("Collab-Kanal verbunden.", { collabId: c.collab_id, workitem: c.workitem });
       runSseReceiver(
         (raw) => {
           const line = frameToLine(raw, {
             members: entry.members, selfSessionId: config.sessionId, collabId: c.collab_id,
+            // Already printed in THIS process: a reconnect must not repeat a line (the receiver
+            // resumes by `Last-Event-ID`, this is the second belt for a frame that arrives twice).
+            after: entry.printedSeq,
           });
-          if (line) writeLine(line);
+          if (!line) return;
+          entry.printedSeq = Math.max(entry.printedSeq, seqOf(raw));
+          writeLine(line);
         },
-        { signal: controller.signal, url: collab.collabEventsUrl(c.collab_id) }
+        {
+          signal: controller.signal,
+          url: collab.collabEventsUrl(c.collab_id),
+          // THIS machine's place in the channel, kept on disk: a closed and reopened session
+          // starts a new process, and without the note it asks the relay for the whole protocol
+          // again (field report 2026-10-19).
+          since: entry.lastSeq > 0 ? entry.lastSeq : null,
+          onEventId: (id) => {
+            const seq = Number(id);
+            if (!Number.isFinite(seq) || seq <= entry.lastSeq) return;
+            entry.lastSeq = seq;
+            rememberCursor(c.collab_id, seq);
+          },
+        }
       ).catch((err) => {
         if (!controller.signal.aborted) log.error("Collab-Empfang beendet.", { error: String(err) });
       });

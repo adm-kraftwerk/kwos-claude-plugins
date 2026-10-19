@@ -15942,12 +15942,12 @@ async function collabDetail(collabId) {
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}`);
   return data;
 }
-async function sendCollabMessage(collabId, text, attachmentId = null) {
+async function sendCollabMessage(collabId, text, attachmentId = null, fromHuman = false) {
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages`, {
     method: "POST",
     body: {
       text: text ?? "",
-      author_kind: "claude",
+      author_kind: fromHuman ? "human" : "claude",
       session_id: config2.sessionId,
       ...attachmentId ? { attachment_id: attachmentId } : {}
     }
@@ -16000,8 +16000,8 @@ import { fstatSync } from "node:fs";
 import { Readable } from "node:stream";
 var RECONNECT_MIN_MS = 2e3;
 var RECONNECT_MAX_MS = 3e4;
-async function runSseReceiver(onMessage, { signal, url = null }) {
-  let lastEventId;
+async function runSseReceiver(onMessage, { signal, url = null, since = null, onEventId = null }) {
+  let lastEventId = since === null || since === void 0 ? void 0 : String(since);
   let delay = RECONNECT_MIN_MS;
   const endpoint = url || eventsUrl();
   while (!signal.aborted) {
@@ -16028,7 +16028,10 @@ async function runSseReceiver(onMessage, { signal, url = null }) {
           const rawEvent = buffer.slice(0, idx);
           buffer = buffer.slice(idx + 2);
           const { id, data } = parseEvent(rawEvent);
-          if (id) lastEventId = id;
+          if (id) {
+            lastEventId = id;
+            if (onEventId) onEventId(id);
+          }
           if (data) onMessage(data);
         }
       }
@@ -16057,6 +16060,56 @@ function sleep2(ms, signal) {
       resolve();
     });
   });
+}
+
+// server/collabCursor.js
+import { mkdirSync, readFileSync as readFileSync2, renameSync, writeFileSync } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { dirname as dirname2, join as join2 } from "node:path";
+var CURSOR_FILE = "collab-cursors.json";
+var MAX_CHANNELS = 40;
+function cursorsPath(env = process.env) {
+  const override = typeof env.KWOS_COLLAB_CURSORS === "string" ? env.KWOS_COLLAB_CURSORS.trim() : "";
+  if (override !== "") return override;
+  const cfg = typeof env.KWOS_CLAUDE_CFG === "string" ? env.KWOS_CLAUDE_CFG.trim() : "";
+  const base = cfg !== "" ? cfg : join2(env.HOME || homedir2(), ".config", "kraftwerk");
+  return join2(base, CURSOR_FILE);
+}
+function readCursor(collabId, path = cursorsPath()) {
+  const all = readAll(path);
+  const seq = Number(all[collabId]);
+  return Number.isFinite(seq) && seq > 0 ? seq : null;
+}
+function rememberCursor(collabId, seq, path = cursorsPath()) {
+  const n = Number(seq);
+  if (!Number.isFinite(n) || n <= 0) return;
+  const all = readAll(path);
+  if (Number(all[collabId]) >= n) return;
+  all[collabId] = n;
+  const keys = Object.keys(all);
+  for (const key of keys.slice(0, Math.max(0, keys.length - MAX_CHANNELS))) delete all[key];
+  try {
+    mkdirSync(dirname2(path), { recursive: true });
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify(all, null, 2)}
+`);
+    renameSync(tmp, path);
+  } catch {
+  }
+}
+function readAll(path) {
+  try {
+    const parsed = JSON.parse(readFileSync2(path, "utf8"));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      const n = Number(value);
+      if (Number.isFinite(n) && n > 0) out[key] = n;
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 // server/listen.js
@@ -16239,7 +16292,15 @@ function stdinIsChannel(fd = 0) {
     return false;
   }
 }
-function frameToLine(raw, { members = [], selfSessionId = null, collabId = null } = {}) {
+function seqOf(raw) {
+  try {
+    const msg = JSON.parse(raw);
+    return Number(msg?.seq) || 0;
+  } catch {
+    return 0;
+  }
+}
+function frameToLine(raw, { members = [], selfSessionId = null, collabId = null, after = 0 } = {}) {
   let msg;
   try {
     msg = JSON.parse(raw);
@@ -16248,6 +16309,7 @@ function frameToLine(raw, { members = [], selfSessionId = null, collabId = null 
   }
   if (!msg || typeof msg !== "object") return null;
   if (!msg.seq) return msg.collab_id ? collabClosedLine(msg.collab_id) : null;
+  if (Number(msg.seq) <= Number(after)) return null;
   if (selfSessionId && msg.from_session === selfSessionId && msg.author_kind !== "human") return null;
   return collabLine({
     collabId: msg.collab_id || collabId,
@@ -16327,7 +16389,8 @@ async function startCollabListener({ writeLine, env = process.env, stdin = proce
         continue;
       }
       const controller = new AbortController();
-      const entry = { controller, members };
+      const entry = { controller, members, lastSeq: readCursor(c.collab_id) ?? 0 };
+      entry.printedSeq = entry.lastSeq;
       open.set(c.collab_id, entry);
       log.info("Collab-Kanal verbunden.", { collabId: c.collab_id, workitem: c.workitem });
       runSseReceiver(
@@ -16335,11 +16398,29 @@ async function startCollabListener({ writeLine, env = process.env, stdin = proce
           const line = frameToLine(raw, {
             members: entry.members,
             selfSessionId: config2.sessionId,
-            collabId: c.collab_id
+            collabId: c.collab_id,
+            // Already printed in THIS process: a reconnect must not repeat a line (the receiver
+            // resumes by `Last-Event-ID`, this is the second belt for a frame that arrives twice).
+            after: entry.printedSeq
           });
-          if (line) writeLine(line);
+          if (!line) return;
+          entry.printedSeq = Math.max(entry.printedSeq, seqOf(raw));
+          writeLine(line);
         },
-        { signal: controller.signal, url: collabEventsUrl(c.collab_id) }
+        {
+          signal: controller.signal,
+          url: collabEventsUrl(c.collab_id),
+          // THIS machine's place in the channel, kept on disk: a closed and reopened session
+          // starts a new process, and without the note it asks the relay for the whole protocol
+          // again (field report 2026-10-19).
+          since: entry.lastSeq > 0 ? entry.lastSeq : null,
+          onEventId: (id) => {
+            const seq = Number(id);
+            if (!Number.isFinite(seq) || seq <= entry.lastSeq) return;
+            entry.lastSeq = seq;
+            rememberCursor(c.collab_id, seq);
+          }
+        }
       ).catch((err) => {
         if (!controller.signal.aborted) log.error("Collab-Empfang beendet.", { error: String(err) });
       });
@@ -16519,12 +16600,16 @@ var TOOLS = [
   },
   {
     name: "collab_send",
-    description: "Schreibt als DU in den kwcollab-Kanal (der Verlauf kennzeichnet die Zeile als 'claude', nicht als Mensch). F\xFCr Befunde, R\xFCckfragen und Absprachen mit den anderen Teilnehmern -- kurz und mit Belegen, keine Rohdaten und keine Zugangsdaten. Nach 10 Claude-Nachrichten in Folge ohne menschliche dazwischen pausiert der Kanal (Antwort 409): dann NICHT erneut versuchen, sondern den eigenen Nutzer fragen.",
+    description: "Schreibt in den kwcollab-Kanal. Ohne `from_human` als DU ('claude' im Verlauf), mit `from_human: true` als die Worte des Menschen, die du weitergibst. F\xFCr Befunde, R\xFCckfragen und Absprachen mit den anderen Teilnehmern -- kurz und mit Belegen, keine Rohdaten und keine Zugangsdaten. Nach 10 Claude-Nachrichten in Folge ohne menschliche dazwischen pausiert der Kanal (Antwort 409): dann NICHT erneut versuchen, sondern den eigenen Nutzer fragen. Gibst du einen Auftrag deines Nutzers wortgleich weiter, setze `from_human` -- sonst zaehlt deine Weitergabe als Agenten-Nachricht und treibt den Pausen-Zaehler.",
     inputSchema: {
       type: "object",
       properties: {
         text: { type: "string", description: "Die Nachricht (kurz; Belege lieber als Anhang)" },
         collab_id: { type: "string", description: "Nur n\xF6tig, wenn diese Session in mehreren Kan\xE4len ist" },
+        from_human: {
+          type: "boolean",
+          description: "Nur setzen, wenn der Text die Worte deines Nutzers sind (Auftrag, Antwort), nicht deine eigene Formulierung. Die Zeile steht dann als Mensch im Verlauf und setzt den Pausen-Zaehler zurueck."
+        },
         attachment_id: {
           type: "string",
           description: "Optional: UUID eines vorher hochgeladenen Anhangs (eigener Upload n\xF6tig)"
@@ -16698,11 +16783,12 @@ async function handleToolCall(name, args = {}) {
     }
     case "collab_send": {
       const c = await resolveCollab(args.collab_id);
-      const sent = await sendCollabMessage(c.collab_id, args.text, args.attachment_id ?? null);
+      const fromHuman = args.from_human === true;
+      const sent = await sendCollabMessage(c.collab_id, args.text, args.attachment_id ?? null, fromHuman);
       return {
         content: [{
           type: "text",
-          text: `In Kanal ${c.collab_id} (Workitem ${c.workitem}) geschrieben. Claude-Nachrichten in Folge ohne Mensch: ${sent.claude_streak ?? "?"}.`
+          text: `In Kanal ${c.collab_id} (Workitem ${c.workitem}) als ${fromHuman ? "Mensch" : "Agent"} geschrieben. Claude-Nachrichten in Folge ohne Mensch: ${sent.claude_streak ?? "?"}.`
         }]
       };
     }

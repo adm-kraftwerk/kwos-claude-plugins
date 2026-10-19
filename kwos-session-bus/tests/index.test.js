@@ -9,6 +9,7 @@ import { installFetchMock } from "./helpers/fetch-mock.js";
 process.env.KWOS_XID_ACCESS_TOKEN = "test-token";
 const { TOOLS, handleToolCall, callTool } = await import("../server/index.js");
 const { config } = await import("../server/config.js");
+const collab = await import("../server/collab.js");
 config.sessionId = "sess-self";
 
 test("TOOLS enthaelt get_attachment mit attachment_id als Pflichtfeld", () => {
@@ -206,6 +207,28 @@ test("collab_accept ohne Ziel nennt den Grund, statt ins Leere zu greifen", asyn
     await assert.rejects(() => handleToolCall("collab_accept", {}), /Kein Kanal angegeben/);
   } finally {
     config.collab = before;
+  }
+});
+
+test("collab_send schreibt ohne from_human als 'claude' und mit ihm als 'human'", async () => {
+  // Der Pausen-Zaehler zaehlt Agenten-Nachrichten in Folge. Wer die Worte seines Nutzers wortgleich
+  // weitergibt, ist der MENSCH, der spricht -- `from_human` sagt das dem Relay. Der Test geht an
+  // `sendCollabMessage` vorbei an der Kanalsuche: die ist hier nicht der Gegenstand.
+  const bodies = [];
+  const mock = installFetchMock((url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return Promise.resolve({
+      ok: true, status: 200, headers: { get: () => "application/json" },
+      json: async () => ({ message: { seq: 1 }, claude_streak: 0 }),
+    });
+  });
+  try {
+    await collab.sendCollabMessage("c-1", "Befund: 502 kommt nach 60 s.");
+    await collab.sendCollabMessage("c-1", "frag tim nach einem witz", null, true);
+    assert.equal(bodies[0].author_kind, "claude");
+    assert.equal(bodies[1].author_kind, "human");
+  } finally {
+    mock.restore();
   }
 });
 

@@ -19,8 +19,12 @@ const RECONNECT_MAX_MS = 30000;
 // `url` defaults to the session stream (kwremote). The kwcollab monitor passes the channel's own
 // URL (GET /v1/collabs/:id/events) -- the frames, the Last-Event-ID handling and the reconnect are
 // the same, and a second receiver next door would be a second place that can get them wrong.
-export async function runSseReceiver(onMessage, { signal, url = null }) {
-  let lastEventId;
+//
+// `since` seeds `Last-Event-ID` for the FIRST request, and `onEventId` reports every id that came
+// in. The channel monitor uses both to keep its place across PROCESSES: an in-memory id only
+// survives a reconnect, so a closed and reopened session asked for the whole protocol again.
+export async function runSseReceiver(onMessage, { signal, url = null, since = null, onEventId = null }) {
+  let lastEventId = since === null || since === undefined ? undefined : String(since);
   let delay = RECONNECT_MIN_MS;
   const endpoint = url || eventsUrl();
 
@@ -49,7 +53,10 @@ export async function runSseReceiver(onMessage, { signal, url = null }) {
           const rawEvent = buffer.slice(0, idx);
           buffer = buffer.slice(idx + 2);
           const { id, data } = parseEvent(rawEvent);
-          if (id) lastEventId = id;
+          if (id) {
+            lastEventId = id;
+            if (onEventId) onEventId(id);
+          }
           if (data) onMessage(data);
         }
       }

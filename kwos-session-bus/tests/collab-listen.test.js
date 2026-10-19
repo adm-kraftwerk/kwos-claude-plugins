@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { connect, createServer } from "node:net";
-import { closeSync, mkdirSync, mkdtempSync, openSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, mkdtempSync, openSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { installFetchMock } from "./helpers/fetch-mock.js";
@@ -22,6 +22,15 @@ import { MARKER_DIR, clientMarkerName } from "../server/sessionMarker.js";
 process.env.KWOS_XID_ACCESS_TOKEN = "test-token";
 process.env.KWOS_CLIENT_ID = "collab-listen-test";
 process.env.KWOS_COLLAB_CANARY = "1";
+// The read cursor is per machine and survives a process on purpose (s. collabCursor.js). A test
+// must not read the developer's real notes -- and the previous test must not leave a cursor that
+// swallows the next one's frame.
+process.env.KWOS_COLLAB_CURSORS = join(tmpdir(), `kwcollab-cursors-${process.pid}.json`);
+// ... and a fresh file per test: the reader's second belt drops a seq it already printed, and the
+// previous test's frame would otherwise swallow the next one's.
+test.beforeEach(() => {
+  rmSync(process.env.KWOS_COLLAB_CURSORS, { force: true });
+});
 
 const SESSION = "11111111-2222-3333-4444-555555555555";
 const COLLAB = "7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c";

@@ -165,16 +165,25 @@ export const TOOLS = [
   {
     name: "collab_send",
     description:
-      "Schreibt als DU in den kwcollab-Kanal (der Verlauf kennzeichnet die Zeile als 'claude', " +
-      "nicht als Mensch). Für Befunde, Rückfragen und Absprachen mit den anderen Teilnehmern -- " +
-      "kurz und mit Belegen, keine Rohdaten und keine Zugangsdaten. Nach 10 Claude-Nachrichten in " +
-      "Folge ohne menschliche dazwischen pausiert der Kanal (Antwort 409): dann NICHT erneut " +
-      "versuchen, sondern den eigenen Nutzer fragen.",
+      "Schreibt in den kwcollab-Kanal. Ohne `from_human` als DU ('claude' im Verlauf), mit " +
+      "`from_human: true` als die Worte des Menschen, die du weitergibst. Für Befunde, Rückfragen " +
+      "und Absprachen mit den anderen Teilnehmern -- kurz und mit Belegen, keine Rohdaten und " +
+      "keine Zugangsdaten. Nach 10 Claude-Nachrichten in Folge ohne menschliche dazwischen " +
+      "pausiert der Kanal (Antwort 409): dann NICHT erneut versuchen, sondern den eigenen Nutzer " +
+      "fragen. Gibst du einen Auftrag deines Nutzers wortgleich weiter, setze `from_human` -- sonst " +
+      "zaehlt deine Weitergabe als Agenten-Nachricht und treibt den Pausen-Zaehler.",
     inputSchema: {
       type: "object",
       properties: {
         text: { type: "string", description: "Die Nachricht (kurz; Belege lieber als Anhang)" },
         collab_id: { type: "string", description: "Nur nötig, wenn diese Session in mehreren Kanälen ist" },
+        from_human: {
+          type: "boolean",
+          description:
+            "Nur setzen, wenn der Text die Worte deines Nutzers sind (Auftrag, Antwort), nicht " +
+            "deine eigene Formulierung. Die Zeile steht dann als Mensch im Verlauf und setzt den " +
+            "Pausen-Zaehler zurueck.",
+        },
         attachment_id: {
           type: "string",
           description: "Optional: UUID eines vorher hochgeladenen Anhangs (eigener Upload nötig)",
@@ -431,11 +440,12 @@ export async function handleToolCall(name, args = {}) {
     }
     case "collab_send": {
       const c = await collab.resolveCollab(args.collab_id);
-      const sent = await collab.sendCollabMessage(c.collab_id, args.text, args.attachment_id ?? null);
+      const fromHuman = args.from_human === true;
+      const sent = await collab.sendCollabMessage(c.collab_id, args.text, args.attachment_id ?? null, fromHuman);
       return {
         content: [{
           type: "text",
-          text: `In Kanal ${c.collab_id} (Workitem ${c.workitem}) geschrieben. ` +
+          text: `In Kanal ${c.collab_id} (Workitem ${c.workitem}) als ${fromHuman ? "Mensch" : "Agent"} geschrieben. ` +
             `Claude-Nachrichten in Folge ohne Mensch: ${sent.claude_streak ?? "?"}.`,
         }],
       };
