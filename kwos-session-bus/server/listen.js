@@ -181,7 +181,15 @@ export function formatLine(rawData) {
   }
 }
 
-async function main() {
+// The relay receive path as a startable function: the ONE monitor process (server/monitor.js) runs
+// this, and -- where the ring released the channel -- the kwcollab receive path next to it. It
+// stood here as a `main()` of its own until 2026-10-19; the reason for the split is the fleet leak
+// in collab-listen.js's header (WI 11506447): a monitor cannot be started mid-session, so the one
+// process that exists in every session has to be the one that carries both paths.
+//
+// `writeLine` is the caller's: both paths write to the same stdout, and two writers would each keep
+// their own spacing (s. createLineWriter) -- which is what the spacing is there to prevent.
+export async function startRelayListener({ writeLine } = {}) {
   // Eigenständig registrieren statt sich auf die Startreihenfolge des MCP-Servers zu
   // verlassen (register ist idempotent) — vermeidet eine Race zwischen den beiden
   // unabhängig gestarteten Prozessen (MCP-Server per stdio, dieser Monitor per `monitors`).
@@ -196,7 +204,7 @@ async function main() {
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  const writeLine = createLineWriter(process.stdout);
+  const out = writeLine ?? createLineWriter(process.stdout);
 
   // `/clear` and `--resume` give this Claude Code process a NEW session id while this monitor keeps
   // running. The SessionStart hook rewrites our marker; nothing else would ever tell us, and a
@@ -207,36 +215,52 @@ async function main() {
   // Deliberately NOT unref'd: it is also what keeps this process alive across the gap between
   // aborting one stream and opening the next. An unref'd timer would let the process exit in
   // exactly that moment, and a monitor that quietly disappears is worse than one that never ran.
+  //
+  // The id is tracked LOCALLY (2026-10-19, WI 11506447): `config.sessionId` is now shared with the
+  // channel's receive path, which runs in this same process and watches the same marker. A watcher
+  // that trusted `refreshSessionId()`'s "changed" answer would go deaf whenever the OTHER one read
+  // the marker first -- it would be told "nothing changed" while its own stream still sits on the
+  // old id. So: let the shared answer move, and compare against what THIS path last bound.
+  let boundId = config.sessionId;
   const watch = setInterval(async () => {
     if (stopping) return;
-    let changed = false;
     try {
-      changed = await refreshSessionId();
+      await refreshSessionId();
     } catch (err) {
       log.error("Session-ID konnte nicht neu gelesen werden.", { error: String(err) });
     }
-    if (!changed) return;
+    if (config.sessionId === boundId) return;
+    boundId = config.sessionId;
     controller.abort();
     controller = new AbortController();
     await registerOrLog();
-    receive(controller, writeLine);
+    receive(controller);
   }, config.sessionIdCheckMs);
 
-  function receive(ctrl, writeLine) {
-    runSseReceiver(forwardToWriter(writeLine), { signal: ctrl.signal }).catch((err) => {
+  function receive(ctrl) {
+    runSseReceiver(forwardToWriter(out), { signal: ctrl.signal }).catch((err) => {
       // Only reachable for a failure the receiver itself does not swallow; its own reconnect loop
       // handles a dead stream. Worth a line, not a crash.
       if (!ctrl.signal.aborted) log.error("SSE-Empfang beendet.", { error: String(err) });
     });
   }
 
+  receive(controller);
+
+  // A monitor ends when its session ends, not when one stream ends -- a dropped stream is the
+  // receiver's own business (it reconnects on its own). So the caller waits for the signal, not for
+  // the stream; at that point the interval is gone. `flush()` stays with the writer's owner.
+  const running = ended.finally(() => clearInterval(watch));
+  return { stop, ended: running };
+}
+
+// Standalone entry (node server/listen.js): the relay path on its own, useful for debugging.
+async function main() {
+  const writeLine = createLineWriter(process.stdout);
+  const listener = await startRelayListener({ writeLine });
   try {
-    receive(controller, writeLine);
-    // A monitor ends when its session ends, not when one stream ends -- a dropped stream is the
-    // receiver's own business (it reconnects on its own). So wait for the signal, not the stream.
-    await ended;
+    await listener.ended;
   } finally {
-    clearInterval(watch);
     // Beim Session-Ende noch gepufferte Zeilen ausliefern, statt sie mit dem Prozess zu verlieren.
     await writeLine.flush();
   }

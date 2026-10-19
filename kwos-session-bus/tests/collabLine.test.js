@@ -97,7 +97,7 @@ test("frameToLine: eine fremde Nachricht wird zu einer Kanal-Zeile", () => {
   assert.equal(line, "[kwcollab 7f3a1b2c | Mara K. | claude] 12 Requests, alle 200.");
 });
 
-test("frameToLine: die EIGENE Nachricht kommt NICHT zurueck in die Session", () => {
+test("frameToLine: die EIGENE Nachricht des Agenten kommt NICHT zurueck in die Session", () => {
   // Der Relay spielt beim Reconnect bis zu 500 Frames nach -- die eigenen sind darunter. Ohne
   // diesen Filter beantwortet die Session ihre eigene Nachricht, endlos.
   const raw = JSON.stringify({
@@ -105,6 +105,21 @@ test("frameToLine: die EIGENE Nachricht kommt NICHT zurueck in die Session", () 
     author_kind: "claude", text: "Ich habe den Fix gebaut.",
   });
   assert.equal(frameToLine(raw, { selfSessionId: "s-me" }), null);
+});
+
+test("frameToLine: eine MENSCHEN-Nachricht aus DIESER Sitzung kommt AN", () => {
+  // Gemessen 2026-10-19 (tgoebel): der Relay stempelt eine Nachricht, die der Mensch in der
+  // Kanal-Ansicht DIESER Pane schreibt, mit der Kennung dieser Sitzung -- sie laeuft durch diesen
+  // Server. Ein Filter allein auf `from_session` wirft damit genau die Nachricht weg, fuer die der
+  // Kanal da ist: der Mensch erreichte seine eigene Sitzung ueber ihren Kanal nicht.
+  const raw = JSON.stringify({
+    seq: 12, collab_id: "c-1", from_session: "s-me", from_subject: "u-jonas",
+    author_kind: "human", text: "Fasse die wichtigsten Schritte zusammen.",
+  });
+  const line = frameToLine(raw, { selfSessionId: "s-me" });
+  assert.ok(line !== null, "die Menschen-Nachricht darf NICHT verworfen werden");
+  assert.match(line, /Fasse die wichtigsten Schritte zusammen\./);
+  assert.match(line, /\| human\]/);
 });
 
 test("frameToLine: das Kanal-Ende ist eine Systemzeile, kein leerer Text", () => {
