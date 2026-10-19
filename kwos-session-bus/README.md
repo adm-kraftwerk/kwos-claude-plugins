@@ -49,14 +49,22 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
     Bild-Content-Block auf (`GET /v1/attachments/:id`) — bewusst NICHT als Base64-Text, das
     sieht ein Sprachmodell nicht als Bild. Kein Autowake: die Session entscheidet selbst, ob/
     wann sie ein angekündigtes Bild abruft.
-- **Background-Monitor** (`monitors/monitors.json` → `server/listen.js`): nutzt das
+- **EIN Background-Monitor** (`monitors/monitors.json` → `server/monitor.js`): nutzt das
   offizielle Claude-Code-`monitors`-Primitiv statt eines selbstgebauten Companion-Prozesses
   (Option A aus Workitem-9831620 §2.2, jetzt auf offiziellem Fundament — siehe Kommentar
   vom 2026-07-16). Hält die SSE-Verbindung zum Relay offen (Reconnect via Last-Event-ID) und
   gibt pro eingehender Nachricht eine formatierte Zeile (`[from]: text`) auf stdout aus.
   Trägt eine Nachricht eine `attachment_id`, wird das als zusätzlicher Hinweis in derselben
   Zeile angehängt (kein eigener Kanal, kein Autowake).
-- **kwcollab-Monitor** (`server/collab-listen.js`, eigener Eintrag mit `"when": "always"`):
+  **Warum genau einer (WI 11506447, 2026-10-19):** ein Monitor-Eintrag ist ein Versprechen des
+  Harness — Claude Code startet ihn bei jedem Sitzungsbeginn (ein fehlendes `when` und `"always"`
+  sind dasselbe) und **kündigt ihn mit seiner Beschreibung an**, bevor der Prozess irgendetwas
+  sagen kann. Ein eigener Eintrag für den kwcollab-Kanal erreichte damit jede `--kwremote`-Sitzung
+  der Flotte (das Plugin ist dort für Remote Control aktiv) mit einer Beschreibung, die ein noch
+  nicht freigegebenes Feature und seine Workitem-Nummer nannte; das Gate im Prozess kam erst
+  danach. Deshalb komponiert `server/monitor.js` beide Empfangspfade, und das Manifest nennt nur
+  den Relay. `tests/monitors.test.js` hält das fest.
+- **kwcollab-Empfang** (`server/collab-listen.js`, gestartet von `server/monitor.js`):
   derselbe Weg für den gemeinsamen Kanal (WI 11482928). Er fragt alle 15 s beim Relay, in welchen
   Kanälen DIESE Sitzung sitzt, hält je Kanal einen eigenen SSE-Strom und gibt Zeilen der Form
   `[kwcollab <kurz> | <Absender> | mensch|claude] <Text>` aus — Absender und Art stehen in der
@@ -65,16 +73,20 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
   500 Frames nach, die eigenen sind darunter, und die Session würde sonst ihre eigene Nachricht
   beantworten.
   **Der Ring entscheidet, ob er überhaupt läuft** (`collabReleased`): ohne ein freigegebenes
-  `KWOS_COLLAB_CANARY` (= `1`/`true`/`yes`; `KWOS_NO_COLLAB` schlägt alles) beendet sich der Monitor
-  sofort — kein Poll, kein Strom. Sonst trüge das Plugin den Empfangspfad in jede
-  `--kwremote`-Sitzung der Flotte, und auf Rechnern außerhalb des Rings kämen Zeilen eines fremden
-  Agenten **ohne** das Prompt-Fragment an, das sie als Fremddaten kennzeichnet. Der Launcher
-  beantwortet die Frage einmal und exportiert sie, damit TUI, kwterm-Server und Plugin dieselbe
-  Antwort lesen (Review-Fund 2026-10-16).
+  `KWOS_COLLAB_CANARY` (= `1`/`true`/`yes`; `KWOS_NO_COLLAB` schlägt alles) startet
+  `startCollabListener` gar nicht — kein Poll, kein Strom, und `null` als Antwort. Sonst trüge das
+  Plugin den Empfangspfad in jede `--kwremote`-Sitzung der Flotte, und auf Rechnern außerhalb des
+  Rings kämen Zeilen eines fremden Agenten **ohne** das Prompt-Fragment an, das sie als Fremddaten
+  kennzeichnet. Der Launcher beantwortet die Frage einmal und exportiert sie, damit TUI,
+  kwterm-Server und Plugin dieselbe Antwort lesen (Review-Fund 2026-10-16).
+  **Dieselbe Antwort gilt für die Werkzeugliste** (WI 11506447): `visibleTools` lässt die
+  `collab_*`-Werkzeuge außerhalb des Rings weg, und `handleToolCall` weist einen Aufruf dort mit
+  `Zusammenarbeit ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY)` ab — ein Name in
+  der Liste ist ein Versprechen, und ein alter Client darf es nicht am Gate vorbei einlösen.
   **Zur Marke `when`:** `"on-skill-invoke:<skill>"` startet einen Monitor mitten in der Sitzung,
   aber nur mit dem VOLL qualifizierten Skill-Namen (`kwos-session-bus:<skill>`); mit dem blanken
   Namen passiert still nichts (im Binary nachgelesen und in einer Sitzung gemessen, 2026-10-15).
-  Deshalb steht hier `"always"`.
+  Für das Manifest spielt sie keine Rolle mehr — es gibt nur einen Eintrag, und der ist der Relay.
 
   **Zeilenbudget — die frühere Annahme "jede Zeile ist eine eigene Notification" ist widerlegt
   (WI 11075502, gemessen):** Claude Code kappt jede Monitor-Zeile bei **500 Zeichen** (eine

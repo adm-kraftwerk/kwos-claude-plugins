@@ -6,6 +6,12 @@ import { config, ensureSessionId, refreshSessionId } from "./config.js";
 import { log } from "./log.js";
 import * as relay from "./relay-client.js";
 import * as collab from "./collab.js";
+// The channel's release question has ONE answer in this plugin, and it is read where the receive
+// path reads it (collab-listen.js, `collabReleased`): the launcher exports it, so the tools and the
+// monitor cannot disagree about it.
+import { collabReleased } from "./collab-listen.js";
+
+const COLLAB_TOOL_PREFIX = "collab_";
 
 export const TOOLS = [
   {
@@ -249,11 +255,27 @@ export const TOOLS = [
 ];
 
 const server = new Server(
-  { name: "kwos-session-bus", version: "0.4.1" },
+  { name: "kwos-session-bus", version: "0.4.2" },
   { capabilities: { tools: {} } }
 );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+/**
+ * The tools a session is OFFERED -- everything except the channel's own, where the ring has not
+ * released it.
+ *
+ * A filter and not merely a refusal (2026-10-19, WI 11506447): the tool list is the session's
+ * picture of what this plugin can do, and `collab_status`, `collab_send`, `collab_accept`,
+ * `collab_leases`, `collab_lease`, `collab_release` and `collab_get_attachment` stood in it
+ * wherever the plugin was enabled -- i.e. in every `--kwremote` session of the fleet, for a channel
+ * the interfaces hide there. A name in the tool list is a promise, and this one was not kept. Same
+ * rule as the monitor entry (s. collab-listen.js's header): what is not released is not announced.
+ */
+export function visibleTools(env = process.env) {
+  if (collabReleased(env)) return TOOLS;
+  return TOOLS.filter((t) => !t.name.startsWith(COLLAB_TOOL_PREFIX));
+}
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: visibleTools() }));
 
 // Reine Dispatch-Logik, getrennt von der stdio/MCP-Verdrahtung (gleiches Prinzip wie
 // lib.js/server.js im litellm-Repo) -- so testbar ohne Server/Transport hochzufahren.
@@ -261,6 +283,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 // das macht callTool() unten, damit ein Test hier den ECHTEN Fehler sieht (Message/Typ),
 // nicht nur eine bereits zu Text geschrumpfte Fehlermeldung.
 export async function handleToolCall(name, args = {}) {
+  // The same gate as `visibleTools`, on the DOING side: a session that kept an old tool list (or
+  // names the tool from its own memory) must not reach the relay either. The wording is kwterm's
+  // own for this state (`Zusammenarbeit ist auf diesem Rechner nicht freigegeben`), so a reader
+  // cannot tell which of the two surfaces answered.
+  if (name.startsWith(COLLAB_TOOL_PREFIX) && !collabReleased()) {
+    throw new Error("Zusammenarbeit ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY).");
+  }
   switch (name) {
     case "list_sessions": {
       const sessions = await relay.listSessions();

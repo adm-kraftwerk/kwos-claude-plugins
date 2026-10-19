@@ -1,12 +1,25 @@
 #!/usr/bin/env node
-// kwcollab monitor (WI 11482928) -- the piece that puts a foreign message into THIS session.
+// The kwcollab receive path (WI 11482928) -- the piece that puts a foreign message into THIS
+// session.
 //
-// Started at session start like the session-bus listener (monitors/monitors.json), and it stays
-// idle until this session joins a channel: being in a collab is a fact on the relay (the member
-// row carries the session id), so the monitor ASKS instead of guessing locally. That is also why
-// it polls: a channel can be joined while the session is already running, and Claude Code cannot
-// start a monitor mid-session reliably (the documented way, `when: "on-skill-invoke:<skill>`, was
-// not dependable in practice) -- so the monitor is always there and picks the channel up.
+// Started by the ONE monitor process every session with this plugin has (server/monitor.js), and
+// it stays idle until this session joins a channel: being in a collab is a fact on the relay (the
+// member row carries the session id), so the monitor ASKS instead of guessing locally. That is
+// also why it polls: a channel can be joined while the session is already running, and Claude Code
+// cannot start a monitor mid-session reliably (the documented way,
+// `when: "on-skill-invoke:<skill>`, was not dependable in practice) -- so the monitor is always
+// there and picks the channel up.
+//
+// WHY IT IS NO LONGER ITS OWN ENTRY IN monitors/monitors.json (2026-10-19, WI 11506447): a monitor
+// entry is a PROMISE the harness makes to the session -- Claude Code starts it at session start (a
+// missing `when` and `"always"` mean the same thing) and announces it by its DESCRIPTION, before
+// the process gets any chance to say no. The gate below therefore came too late: this plugin is
+// enabled in every `--kwremote` session (a fleet feature, s. bootstrap/kwclaude-gw.sh in the
+// litellm repo), so the description naming kwcollab and its workitem was announced in every such
+// session of the fleet, and the monitor exited a moment later. The fleet saw an unreleased
+// feature's name and the model reacted to that line. Where the channel is not released, nothing
+// about it may be announced: this path rides along in the listener those sessions already have,
+// and `collabReleased` decides whether it is started at all.
 //
 // One line per message on stdout, diagnostics on stderr (the convention of this plugin, s.
 // listen.js). The line format lives in collabLine.js -- it is the contract with the prompt
@@ -94,13 +107,28 @@ export function frameToLine(raw, { members = [], selfSessionId = null, collabId 
   });
 }
 
-async function main() {
-  // The ring decides (s. collabReleased): outside it this monitor does not run at all -- no poll,
-  // no stream, no line. Logged once, because "the channel is silent" and "the channel was never
-  // switched on here" look identical from inside a session.
-  if (!collabReleased()) {
-    log.info("kwcollab ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY) -- Monitor beendet sich.");
-    return;
+/**
+ * Starts the channel receive path and returns a handle, or `null` where the ring has not released
+ * the channel.
+ *
+ * `null` is the answer the caller needs: it means "there is nothing to stop and nothing that could
+ * have been announced" -- on a machine outside the ring this function must not touch the relay at
+ * all (no poll, no stream, no line).
+ *
+ * The caller owns the writer: the process that starts this also writes the relay's own lines, and
+ * two writers on one stdout would each keep their own spacing (the spacing exists because Claude
+ * Code bundles lines that follow within ~200 ms, s. listen.js). `writeLine.flush()` at session end
+ * is the caller's job too -- it belongs to the writer.
+ *
+ * `ended` resolves when the receive path is fully down (timers cleared, streams closed).
+ */
+export async function startCollabListener({ writeLine, env = process.env } = {}) {
+  // The ring decides (s. collabReleased): outside it this receive path does not run at all -- no
+  // poll, no stream, no line. Logged once, because "the channel is silent" and "the channel was
+  // never switched on here" look identical from inside a session.
+  if (!collabReleased(env)) {
+    log.info("kwcollab ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY) -- kein Empfang.");
+    return null;
   }
   await ensureSessionId();
 
@@ -114,7 +142,6 @@ async function main() {
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  const writeLine = createLineWriter(process.stdout);
   // One stream per channel, keyed by collab id. Kept across polls, so a channel we are already in
   // is not re-opened every 15 s (that would replay the backlog again and again).
   const open = new Map();
@@ -190,21 +217,27 @@ async function main() {
   // `/clear` and `--resume` hand out a new session id inside this process: the streams belong to
   // the OLD one and would stay deaf. Same rule as the session listener (listen.js).
   //
+  // The id is tracked LOCALLY, for the same reason as there (2026-10-19, WI 11506447): this path
+  // now shares `config.sessionId` with the relay path in ONE process, and a watcher that trusted
+  // the shared "changed" answer would miss the change whenever the other one read the marker first
+  // -- and with it the re-accept below, which is what keeps the channel after a /clear.
+  //
   // UNREF'D, and that is a review finding and not a detail (Kai, 2026-10-16, on the re-bind timer
   // in `index.js`): an open stdin already keeps this process up for as long as the session lives,
   // so a timer that is NOT unref'd does not hold anything together -- it only decides what happens
   // after the session is gone. The orphan then keeps polling the relay every 15 s for a session
   // nobody is in any more. Measured on the sibling timer: 47 ms to exit with it unref'd, still
   // alive 10 s later without.
+  let boundId = config.sessionId;
   const watch = setInterval(async () => {
     if (stopping) return;
-    let changed = false;
     try {
-      changed = await refreshSessionId();
+      await refreshSessionId();
     } catch (err) {
       log.error("Session-ID konnte nicht neu gelesen werden.", { error: String(err) });
     }
-    if (!changed) return;
+    if (config.sessionId === boundId) return;
+    boundId = config.sessionId;
     // The streams belonged to the OLD id -- and so does the member row on the relay: after /clear
     // this session is joined to NOTHING until it says so again (`myJoinedCollabs` filters on the
     // member row's session id, s. collab.js). That is exactly what the relay's repeat accept is for:
@@ -232,16 +265,36 @@ async function main() {
   }, config.sessionIdCheckMs);
   watch.unref();
 
-  try {
+  let pollTimer = null;
+  // The receive path comes up in the background and tears itself down when `stop()` is called --
+  // so the caller holds a handle immediately, and `ended` means "everything is down", not "the
+  // first poll is back". `pollTimer` is assigned inside, hence the guard in the teardown: a stop
+  // that arrives before the first poll returned must not leave the interval running.
+  const running = (async () => {
     await poll();
-    const pollTimer = setInterval(() => { poll().catch(() => {}); }, COLLAB_POLL_MS);
+    pollTimer = setInterval(() => { poll().catch(() => {}); }, COLLAB_POLL_MS);
     pollTimer.unref();
     await ended;
-  } finally {
-    clearInterval(watch);
-    closeAll();
-    await writeLine.flush();
-  }
+  })()
+    .catch((err) => log.error("Collab-Empfang beendet.", { error: String(err) }))
+    .finally(() => {
+      clearInterval(watch);
+      if (pollTimer) clearInterval(pollTimer);
+      closeAll();
+    });
+
+  return { stop, ended: running };
+}
+
+// Standalone entry (the folded-in path is what runs in a session, s. server/monitor.js): useful to
+// watch one receive path on its own, and what the file header above describes.
+async function main() {
+  const writeLine = createLineWriter(process.stdout);
+  const listener = await startCollabListener({ writeLine });
+  // Outside the ring: nothing was started, nothing to wait for, nothing to flush.
+  if (!listener) return;
+  await listener.ended;
+  await writeLine.flush();
 }
 
 // Guard as in index.js/listen.js: an `import` from a test must not open a real SSE connection.

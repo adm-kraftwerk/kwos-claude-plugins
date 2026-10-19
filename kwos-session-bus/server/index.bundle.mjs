@@ -6915,7 +6915,7 @@ var require_dist = __commonJS({
 });
 
 // server/index.js
-import { fileURLToPath } from "node:url";
+import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // node_modules/zod/v4/core/core.js
 var _a;
@@ -15798,6 +15798,9 @@ async function broadcast(text, workitemRef) {
     body: { from: config2.sessionId, text, workitem_ref: workitemRef }
   });
 }
+function eventsUrl() {
+  return `${config2.relayUrl}/v1/sessions/${encodeURIComponent(config2.sessionId)}/events`;
+}
 async function publishToChannel(channel, text, workitemRef) {
   const { data } = await call(`/v1/channels/${encodeURIComponent(channel)}/publish`, {
     method: "POST",
@@ -15985,8 +15988,396 @@ async function acquireLease(collabId, { subjectId, section, ttlSec, exclusive, r
 async function releaseLease(collabId, leaseId) {
   await call(`/v1/collabs/${encodeURIComponent(collabId)}/leases/${encodeURIComponent(leaseId)}`, { method: "DELETE" });
 }
+function collabEventsUrl(collabId) {
+  return `${config2.relayUrl}/v1/collabs/${encodeURIComponent(collabId)}/events`;
+}
+
+// server/collab-listen.js
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+
+// server/sse-receiver.js
+import { Readable } from "node:stream";
+var RECONNECT_MIN_MS = 2e3;
+var RECONNECT_MAX_MS = 3e4;
+async function runSseReceiver(onMessage, { signal, url = null }) {
+  let lastEventId;
+  let delay = RECONNECT_MIN_MS;
+  const endpoint = url || eventsUrl();
+  while (!signal.aborted) {
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(endpoint, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "text/event-stream",
+          ...lastEventId ? { "Last-Event-ID": lastEventId } : {}
+        },
+        signal
+      });
+      if (!res.ok || !res.body) {
+        throw new Error(`SSE-Verbindung fehlgeschlagen: ${res.status}`);
+      }
+      log.info("SSE verbunden.", { lastEventId });
+      delay = RECONNECT_MIN_MS;
+      let buffer = "";
+      for await (const chunk of Readable.fromWeb(res.body)) {
+        buffer += chunk.toString("utf8");
+        let idx;
+        while ((idx = buffer.indexOf("\n\n")) !== -1) {
+          const rawEvent = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          const { id, data } = parseEvent(rawEvent);
+          if (id) lastEventId = id;
+          if (data) onMessage(data);
+        }
+      }
+    } catch (err) {
+      if (signal.aborted) return;
+      log.error("SSE-Verbindung verloren, reconnect.", { error: String(err), delayMs: delay });
+    }
+    await sleep2(delay, signal);
+    delay = Math.min(delay * 2, RECONNECT_MAX_MS);
+  }
+}
+function parseEvent(rawEvent) {
+  let id;
+  const dataLines = [];
+  for (const line of rawEvent.split("\n")) {
+    if (line.startsWith("id:")) id = line.slice(3).trim();
+    else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+  }
+  return { id, data: dataLines.length ? dataLines.join("\n") : void 0 };
+}
+function sleep2(ms, signal) {
+  return new Promise((resolve) => {
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => {
+      clearTimeout(t);
+      resolve();
+    });
+  });
+}
+
+// server/listen.js
+import { fileURLToPath } from "node:url";
+var MAX_LINE_CHARS = 480;
+var LINE_SPACING_MS = 250;
+var MAX_RETRY_MS = 5e3;
+var defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function createLineWriter(stream, { spacingMs = LINE_SPACING_MS } = {}) {
+  const queue = [];
+  let running = null;
+  let active = false;
+  let lastWriteAt = null;
+  async function drain() {
+    active = true;
+    try {
+      while (queue.length) {
+        if (lastWriteAt !== null) {
+          const wait = spacingMs - (performance.now() - lastWriteAt);
+          if (wait > 0) await defaultSleep(wait);
+        }
+        stream.write(queue[0] + "\n");
+        queue.shift();
+        lastWriteAt = performance.now();
+      }
+    } finally {
+      active = false;
+      running = null;
+    }
+  }
+  function start() {
+    if (!active) running = drain();
+    return running;
+  }
+  function kick(attempt = 0) {
+    start().catch((err) => {
+      const delay = Math.min(spacingMs * 2 ** attempt, MAX_RETRY_MS);
+      log.error("Zeile konnte nicht geschrieben werden, neuer Versuch.", { error: String(err), delayMs: delay });
+      const t = setTimeout(() => kick(attempt + 1), delay);
+      t.unref?.();
+    });
+  }
+  const write2 = (line) => {
+    queue.push(line);
+    kick();
+  };
+  write2.flush = async ({ timeoutMs = 5e3 } = {}) => {
+    const deadline = performance.now() + timeoutMs;
+    while (queue.length && performance.now() < deadline) await defaultSleep(25);
+  };
+  return write2;
+}
+function forwardToWriter(writeLine) {
+  return (rawData) => writeLine(formatLine(rawData));
+}
+function formatLine(rawData) {
+  try {
+    const msg = JSON.parse(rawData);
+    const from = msg.from_session || "unknown";
+    const hasAttachment = Boolean(msg.attachment_id);
+    const raw = msg.text ?? (hasAttachment ? "(Bild ohne Text)" : rawData);
+    const text = typeof raw === "string" ? raw : String(raw);
+    const hint = hasAttachment ? ` [Bild angeh\xE4ngt, attachment_id=${msg.attachment_id} -- mit get_attachment abrufbar]` : "";
+    const prefix = `[${from}]: `;
+    if (prefix.length + text.length + hint.length <= MAX_LINE_CHARS) {
+      return `${prefix}${text}${hint}`;
+    }
+    const seq = Number.isInteger(msg.seq) ? msg.seq : null;
+    const marker = ` \u2026 [+${text.length} Zeichen${seq === null ? "" : ` -- get_message(seq=${seq})`}]`;
+    const keep = Math.max(0, MAX_LINE_CHARS - prefix.length - marker.length - hint.length);
+    return `${prefix}${text.slice(0, keep)}${marker}${hint}`.slice(0, MAX_LINE_CHARS);
+  } catch {
+    return typeof rawData === "string" ? rawData.slice(0, MAX_LINE_CHARS) : rawData;
+  }
+}
+async function startRelayListener({ writeLine } = {}) {
+  await ensureSessionId();
+  await registerOrLog();
+  let controller = new AbortController();
+  let stopping = false;
+  let signalEnded;
+  const ended = new Promise((resolve) => {
+    signalEnded = resolve;
+  });
+  const stop = () => {
+    stopping = true;
+    controller.abort();
+    signalEnded();
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  const out = writeLine ?? createLineWriter(process.stdout);
+  let boundId = config2.sessionId;
+  const watch = setInterval(async () => {
+    if (stopping) return;
+    try {
+      await refreshSessionId();
+    } catch (err) {
+      log.error("Session-ID konnte nicht neu gelesen werden.", { error: String(err) });
+    }
+    if (config2.sessionId === boundId) return;
+    boundId = config2.sessionId;
+    controller.abort();
+    controller = new AbortController();
+    await registerOrLog();
+    receive(controller);
+  }, config2.sessionIdCheckMs);
+  function receive(ctrl) {
+    runSseReceiver(forwardToWriter(out), { signal: ctrl.signal }).catch((err) => {
+      if (!ctrl.signal.aborted) log.error("SSE-Empfang beendet.", { error: String(err) });
+    });
+  }
+  receive(controller);
+  const running = ended.finally(() => clearInterval(watch));
+  return { stop, ended: running };
+}
+async function main() {
+  const writeLine = createLineWriter(process.stdout);
+  const listener = await startRelayListener({ writeLine });
+  try {
+    await listener.ended;
+  } finally {
+    await writeLine.flush();
+  }
+}
+async function registerOrLog() {
+  try {
+    await register();
+  } catch (err) {
+    log.error("Registrierung (Listener) fehlgeschlagen.", { error: String(err) });
+  }
+}
+var isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
+  main().catch((err) => {
+    log.error("Unerwarteter Fehler im Session-Bus-Listener.", { error: String(err) });
+    process.exit(1);
+  });
+}
+
+// server/collabLine.js
+var COLLAB_LINE_PREFIX = "[kwcollab";
+var COLLAB_KINDS = ["human", "claude", "system"];
+function collabShortId(collabId) {
+  return String(collabId || "").split("-")[0];
+}
+function collabLine({ collabId, from, kind, text, attachmentId, maxChars = MAX_LINE_CHARS }) {
+  const who = typeof from === "string" && from.trim() ? from.trim() : "?";
+  const authorKind = COLLAB_KINDS.includes(kind) ? kind : "claude";
+  let body = typeof text === "string" ? text.trim() : "";
+  if (!body && attachmentId) body = `[Anhang: mit collab_get_attachment ${attachmentId} abrufbar]`;
+  const head = `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)} | ${who} | ${authorKind}] `;
+  if (head.length + body.length <= maxChars) return head + body;
+  const marker = `\u2026 [gek\xFCrzt, ${body.length} Zeichen]`;
+  const keep = Math.max(0, maxChars - head.length - marker.length);
+  return `${head}${body.slice(0, keep)}${marker}`.slice(0, maxChars);
+}
+function collabClosedLine(collabId) {
+  return `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)} | system] Kanal beendet -- Protokoll auf dem Server geloescht.`;
+}
+function senderName(message, members) {
+  const subject = message?.from_subject;
+  if (subject === "relay") return "kwcollab";
+  const m = (members || []).find((x) => x.subject === subject);
+  return m?.display_name || subject || "?";
+}
+
+// server/collab-listen.js
+var COLLAB_POLL_MS = readCheckInterval(process.env.KWOS_COLLAB_POLL_MS, 15e3);
+function collabReleased(env = process.env) {
+  if (String(env?.KWOS_NO_COLLAB ?? "") !== "") return false;
+  const v = String(env?.KWOS_COLLAB_CANARY ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}
+function frameToLine(raw, { members = [], selfSessionId = null, collabId = null } = {}) {
+  let msg;
+  try {
+    msg = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!msg || typeof msg !== "object") return null;
+  if (!msg.seq) return msg.collab_id ? collabClosedLine(msg.collab_id) : null;
+  if (selfSessionId && msg.from_session === selfSessionId) return null;
+  return collabLine({
+    collabId: msg.collab_id || collabId,
+    from: senderName(msg, members),
+    kind: msg.author_kind,
+    text: msg.text,
+    attachmentId: msg.attachment_id
+  });
+}
+async function startCollabListener({ writeLine, env = process.env } = {}) {
+  if (!collabReleased(env)) {
+    log.info("kwcollab ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY) -- kein Empfang.");
+    return null;
+  }
+  await ensureSessionId();
+  let stopping = false;
+  let signalEnded;
+  const ended = new Promise((resolve) => {
+    signalEnded = resolve;
+  });
+  const stop = () => {
+    stopping = true;
+    signalEnded();
+  };
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
+  const open = /* @__PURE__ */ new Map();
+  const closeAll = () => {
+    for (const [id, entry] of open) {
+      entry.controller.abort();
+    }
+    open.clear();
+  };
+  let lastJoined = /* @__PURE__ */ new Set();
+  let inflight = null;
+  function poll() {
+    if (stopping) return Promise.resolve();
+    if (!inflight) inflight = pollOnce().finally(() => {
+      inflight = null;
+    });
+    return inflight;
+  }
+  async function pollOnce() {
+    let joined = [];
+    try {
+      joined = await myJoinedCollabs();
+    } catch (err) {
+      log.error("Collab-Liste nicht abrufbar.", { error: String(err) });
+      return;
+    }
+    const wanted = new Set(joined.map((c) => c.collab_id));
+    lastJoined = wanted;
+    for (const [id, entry] of [...open]) {
+      if (!wanted.has(id)) {
+        entry.controller.abort();
+        open.delete(id);
+      }
+    }
+    for (const c of joined) {
+      const members = Array.isArray(c.members) ? c.members : [];
+      const existing = open.get(c.collab_id);
+      if (existing) {
+        existing.members = members;
+        continue;
+      }
+      const controller = new AbortController();
+      const entry = { controller, members };
+      open.set(c.collab_id, entry);
+      log.info("Collab-Kanal verbunden.", { collabId: c.collab_id, workitem: c.workitem });
+      runSseReceiver(
+        (raw) => {
+          const line = frameToLine(raw, {
+            members: entry.members,
+            selfSessionId: config2.sessionId,
+            collabId: c.collab_id
+          });
+          if (line) writeLine(line);
+        },
+        { signal: controller.signal, url: collabEventsUrl(c.collab_id) }
+      ).catch((err) => {
+        if (!controller.signal.aborted) log.error("Collab-Empfang beendet.", { error: String(err) });
+      });
+    }
+  }
+  let boundId = config2.sessionId;
+  const watch = setInterval(async () => {
+    if (stopping) return;
+    try {
+      await refreshSessionId();
+    } catch (err) {
+      log.error("Session-ID konnte nicht neu gelesen werden.", { error: String(err) });
+    }
+    if (config2.sessionId === boundId) return;
+    boundId = config2.sessionId;
+    const was = [.../* @__PURE__ */ new Set([...open.keys(), ...lastJoined])];
+    closeAll();
+    for (const id of was) {
+      try {
+        await acceptCollab(id);
+      } catch (err) {
+        log.error("Kanal nach dem Session-Wechsel nicht neu angenommen.", { collabId: id, error: String(err) });
+      }
+    }
+    await poll();
+  }, config2.sessionIdCheckMs);
+  watch.unref();
+  let pollTimer = null;
+  const running = (async () => {
+    await poll();
+    pollTimer = setInterval(() => {
+      poll().catch(() => {
+      });
+    }, COLLAB_POLL_MS);
+    pollTimer.unref();
+    await ended;
+  })().catch((err) => log.error("Collab-Empfang beendet.", { error: String(err) })).finally(() => {
+    clearInterval(watch);
+    if (pollTimer) clearInterval(pollTimer);
+    closeAll();
+  });
+  return { stop, ended: running };
+}
+async function main2() {
+  const writeLine = createLineWriter(process.stdout);
+  const listener = await startCollabListener({ writeLine });
+  if (!listener) return;
+  await listener.ended;
+  await writeLine.flush();
+}
+var isMain2 = process.argv[1] && fileURLToPath2(import.meta.url) === process.argv[1];
+if (isMain2) {
+  main2().catch((err) => {
+    log.error("Unerwarteter Fehler im Collab-Listener.", { error: String(err) });
+    process.exit(1);
+  });
+}
 
 // server/index.js
+var COLLAB_TOOL_PREFIX = "collab_";
 var TOOLS = [
   {
     name: "list_sessions",
@@ -16176,11 +16567,18 @@ var TOOLS = [
   }
 ];
 var server = new Server(
-  { name: "kwos-session-bus", version: "0.4.1" },
+  { name: "kwos-session-bus", version: "0.4.2" },
   { capabilities: { tools: {} } }
 );
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+function visibleTools(env = process.env) {
+  if (collabReleased(env)) return TOOLS;
+  return TOOLS.filter((t) => !t.name.startsWith(COLLAB_TOOL_PREFIX));
+}
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: visibleTools() }));
 async function handleToolCall(name, args = {}) {
+  if (name.startsWith(COLLAB_TOOL_PREFIX) && !collabReleased()) {
+    throw new Error("Zusammenarbeit ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY).");
+  }
   switch (name) {
     case "list_sessions": {
       const sessions = await listSessions();
@@ -16329,7 +16727,7 @@ async function callTool(request) {
   }
 }
 server.setRequestHandler(CallToolRequestSchema, callTool);
-async function main() {
+async function main3() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   await ensureSessionId();
@@ -16369,9 +16767,9 @@ async function main() {
   }, config2.sessionIdCheckMs);
   rebindTimer.unref();
 }
-var isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-if (isMain) {
-  main().catch((err) => {
+var isMain3 = process.argv[1] && fileURLToPath3(import.meta.url) === process.argv[1];
+if (isMain3) {
+  main3().catch((err) => {
     log.error("Unerwarteter Fehler beim Start.", { error: String(err) });
     process.exit(1);
   });
@@ -16379,5 +16777,6 @@ if (isMain) {
 export {
   TOOLS,
   callTool,
-  handleToolCall
+  handleToolCall,
+  visibleTools
 };

@@ -1,6 +1,6 @@
 {
   "name": "kwos-session-bus",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "MCP-Client für den kw/OS Session Message Relay — Nachrichtenaustausch zwischen Claude-Code-Sessions und der kwcollab-Kanal (gemeinsame Arbeit mehrerer Personen auf einem Workitem, WI 11482928). Tools: list_sessions, send_message, broadcast, notify_dependents, ask_remote, get_message, get_attachment, collab_status, collab_accept, collab_send, collab_leases, collab_lease, collab_release, collab_get_attachment; Registrierung, Heartbeat und Empfang laufen automatisch im Hintergrund.",
   "author": {
     "name": "S&P Solutions GmbH"

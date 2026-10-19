@@ -1,13 +1,7 @@
 [
   {
     "name": "session-bus-listener",
-    "command": "node \"${CLAUDE_PLUGIN_ROOT}\"/server/listen.js",
+    "command": "node \"${CLAUDE_PLUGIN_ROOT}\"/server/monitor.js",
     "description": "Empfängt Nachrichten vom kw/OS Session Relay via SSE und liefert sie als Notification"
-  },
-  {
-    "name": "kwcollab-listener",
-    "command": "node \"${CLAUDE_PLUGIN_ROOT}\"/server/collab-listen.js",
-    "when": "always",
-    "description": "Empfängt Nachrichten aus kwcollab-Kanälen (gemeinsame Arbeit auf einem Workitem, WI 11482928) und liefert sie mit Absender und Art (Mensch/Claude) als Notification"
   }
 ]

@@ -269,8 +269,14 @@ test("nach einem Session-Wechsel nimmt der Monitor seine Kanaele neu an", async 
   // daran haengt die Wirkung -- `closeAll()` leert die Liste, aus der die IDs kommen.
   const { readFile } = await import("node:fs/promises");
   const src = await readFile(new URL("../server/collab-listen.js", import.meta.url), "utf8");
-  const start = src.indexOf("if (!changed) return;");
+  // Die Bedingung ist seit 2026-10-19 (WI 11506447) der EIGENE letzte Stand und nicht mehr das
+  // "changed" der gemeinsamen Antwort: Relay- und Kanal-Pfad laufen im selben Prozess und lesen
+  // denselben Marker, also bekaeme der zweite "nichts geaendert" zu hoeren, waehrend sein Strom noch
+  // auf der alten ID sitzt -- und mit ihm verloere er das erneute accept unten.
+  const start = src.indexOf("if (config.sessionId === boundId) return;");
   assert.ok(start > 0, "der Nachlauf-Zweig ist nicht mehr auffindbar -- dann prueft dieser Fall nichts");
+  assert.match(src, /let boundId = config\.sessionId;/,
+    "der eigene letzte Stand muss VOR dem Timer stehen");
   const tail = src.slice(start, src.indexOf("}, config.sessionIdCheckMs)"));
   const capture = tail.indexOf("const was = ");
   const close = tail.indexOf("closeAll()");
@@ -310,7 +316,21 @@ test("collabReleased: dieselben Schreibweisen wie der Launcher, NO schlaegt alle
     { KWOS_COLLAB_CANARY: "no" }, { KWOS_COLLAB_CANARY: "canary" }]) {
     assert.equal(collabReleased(env), false, JSON.stringify(env));
   }
-  assert.equal(collabReleased(undefined), false, "kein Environment ist auch kein Ja");
+  // Kein Environment heisst auch kein Ja -- ABER nur das LEERE: ohne Argument greift der
+  // Default-Parameter, und der liest process.env. Auf einer Canary-Maschine steht die Variable
+  // dort, und die Suite war damit rot, ohne dass der Code sich geaendert haette (gemessen
+  // 2026-10-19 auf dem Spezimen). Deshalb wird der Default-Pfad hier ausdruecklich mit leerer
+  // Umgebung geprueft statt mit "undefined" und einem Rechner, der zufaellig freigegeben ist.
+  const saved = { ...process.env };
+  try {
+    for (const k of ["KWOS_COLLAB_CANARY", "KWOS_NO_COLLAB"]) delete process.env[k];
+    assert.equal(collabReleased(undefined), false, "leere Umgebung ist auch kein Ja");
+  } finally {
+    for (const k of ["KWOS_COLLAB_CANARY", "KWOS_NO_COLLAB"]) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
   // KWOS_NO_COLLAB schlaegt alles -- und zaehlt wie in der Shell als "nicht leer", also auch ein
   // einzelnes Leerzeichen.
   assert.equal(collabReleased({ KWOS_COLLAB_CANARY: "1", KWOS_NO_COLLAB: "1" }), false);
@@ -321,9 +341,58 @@ test("collabReleased: dieselben Schreibweisen wie der Launcher, NO schlaegt alle
 test("collabReleased: der Monitor startet gar nicht erst, wenn der Ring ihn nicht kennt", async () => {
   const { readFile } = await import("node:fs/promises");
   const src = await readFile(new URL("../server/collab-listen.js", import.meta.url), "utf8");
-  const main = src.slice(src.indexOf("async function main()"), src.indexOf("// Guard as in index.js"));
-  const gate = main.indexOf("if (!collabReleased())");
+  const main = src.slice(src.indexOf("export async function startCollabListener"), src.indexOf("// Standalone entry"));
+  const gate = main.indexOf("if (!collabReleased(env))");
   const session = main.indexOf("await ensureSessionId()");
-  assert.ok(gate > 0, "das Ring-Gate muss in main() stehen");
+  assert.ok(gate > 0, "das Ring-Gate muss in startCollabListener stehen");
   assert.ok(session > gate, "und VOR allem anderen: kein ensureSessionId, kein Poll, kein Strom");
+  // Ausserhalb des Rings gibt es nichts zu stoppen und nichts, was angekuendigt werden koennte.
+  assert.match(main.slice(gate, session), /return null/);
+});
+
+// ── Werkzeugliste hinter demselben Gate (WI 11506447) ───────────────────────────────────────
+//
+// Die Werkzeugliste ist das Bild, das die Sitzung von diesem Plugin hat. Die `collab_*`-Werkzeuge
+// standen darin ueberall, wo das Plugin aktiv war -- also in jeder `--kwremote`-Sitzung der Flotte,
+// fuer einen Kanal, den die Oberflaechen dort verbergen. Ein Name in der Liste ist ein Versprechen;
+// dieses wurde nicht gehalten.
+test("visibleTools: ohne Freigabe kein einziges collab_*-Werkzeug, mit Freigabe alle", async () => {
+  const { TOOLS, visibleTools } = await import("../server/index.js");
+  const names = (tools) => tools.map((t) => t.name);
+  const collabNames = names(TOOLS).filter((n) => n.startsWith("collab_"));
+  assert.ok(collabNames.length > 0, "Vorbedingung: TOOLS enthaelt die Kanal-Werkzeuge");
+
+  for (const env of [{}, { KWOS_COLLAB_CANARY: "0" }, { KWOS_COLLAB_CANARY: "1", KWOS_NO_COLLAB: "1" }]) {
+    const shown = names(visibleTools(env));
+    assert.deepEqual(
+      shown.filter((n) => n.startsWith("collab_")), [],
+      `ohne Freigabe darf kein Kanal-Werkzeug erscheinen: ${JSON.stringify(env)}`
+    );
+    // Die Relay-Werkzeuge bleiben unberuehrt -- das ist der Sinn dieses Plugins in der Flotte.
+    assert.ok(shown.includes("list_sessions"), "Relay-Werkzeuge duerfen nicht mitverschwinden");
+  }
+
+  for (const env of [{ KWOS_COLLAB_CANARY: "1" }, { KWOS_COLLAB_CANARY: "yes" }]) {
+    assert.deepEqual(names(visibleTools(env)), names(TOOLS), JSON.stringify(env));
+  }
+});
+
+test("handleToolCall: ein collab_*-Aufruf ohne Freigabe erreicht den Relay nicht", async () => {
+  const { handleToolCall } = await import("../server/index.js");
+  const before = process.env.KWOS_COLLAB_CANARY;
+  delete process.env.KWOS_COLLAB_CANARY;
+  const mock = installFetchMock(() => {
+    throw new Error("Der Relay darf hier gar nicht gefragt werden.");
+  });
+  try {
+    await assert.rejects(
+      () => handleToolCall("collab_status", {}),
+      /nicht freigegeben \(KWOS_COLLAB_CANARY\)/
+    );
+    assert.equal(mock.calls.length, 0);
+  } finally {
+    mock.restore();
+    if (before === undefined) delete process.env.KWOS_COLLAB_CANARY;
+    else process.env.KWOS_COLLAB_CANARY = before;
+  }
 });
