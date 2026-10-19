@@ -481,10 +481,16 @@ async function main() {
   // registration above -- the relay's accept checks that the session belongs to the caller, and
   // that check reads exactly this registry row.
   //
+  // Behind the SAME gate as the tools and the receive path (2026-10-19, WI 11506447): an invitation
+  // can only come from an interface that shows the channel, so outside the ring this variable is
+  // either stale (a hand-set environment, an older launcher) or somebody testing -- and a session
+  // that silently joins a channel it was never offered would then receive lines from other people's
+  // agents without the prompt fragment that marks them as foreign data.
+  //
   // A failure here must not cost the session: the channel is an addition, and the human can join
   // again from an interface. It is reported, not swallowed -- a silent failure would leave somebody
   // waiting in a channel that this session never entered.
-  if (config.collab) {
+  if (config.collab && collabReleased()) {
     try {
       await collab.acceptCollab(config.collab);
       log.info("Collab-Kanal beigetreten.", { collabId: config.collab });

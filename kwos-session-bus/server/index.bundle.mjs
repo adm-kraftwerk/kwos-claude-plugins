@@ -16737,7 +16737,7 @@ async function main3() {
   } catch (err) {
     log.error("Registrierung fehlgeschlagen.", { error: String(err) });
   }
-  if (config2.collab) {
+  if (config2.collab && collabReleased()) {
     try {
       await acceptCollab(config2.collab);
       log.info("Collab-Kanal beigetreten.", { collabId: config2.collab });
