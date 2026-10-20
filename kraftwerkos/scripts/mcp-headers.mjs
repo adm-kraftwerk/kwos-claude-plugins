@@ -1,52 +1,49 @@
 #!/usr/bin/env node
 /**
- * mcp-headers.mjs — die Kopfzeilen fuer den kw/OS-MCP-Server (`headersHelper`).
+ * mcp-headers.mjs — the headers for the kw/OS MCP server (`headersHelper`).
  *
- * WARUM ES DAS GIBT: `kraftwerk-os` stand mit `oauth.callbackPort: 54545` in `.mcp.json` — ein
- * FESTER Port. Auf einer Maschine laufen aber viele Sitzungen gleichzeitig (gemessen: sieben), und
- * jede, die sich authentifizieren will, bindet genau diesen einen Port. Die zweite bekommt:
+ * WHY THIS EXISTS: `kraftwerk-os` used to be declared with `oauth.callbackPort: 54545` in
+ * `.mcp.json` — a FIXED port. A machine runs many sessions at once (measured: seven), and every
+ * session that wants to authenticate binds exactly that one port. The second one gets, for good:
  *
  *     OAuth callback port 54545 is already in use -- another process may be holding it.
  *
- * Gemessen am 2026-10-20, zwei Sonden gegen die echten Endpunkte:
+ * Measured on 2026-10-20, two probes against the real endpoints:
  *
- *   1. `https://xid.supinfo.de/oidc/auth?...&redirect_uri=http://localhost:61234/callback`
- *      antwortet 303 und leitet auf GENAU diese URI weiter (der Fehler im Query ist nur die fehlende
- *      PKCE) — der Client `mcp_kos` akzeptiert also JEDEN Loopback-Port. Der feste Port war nie eine
- *      Anforderung des Autorisierungsservers.
- *   2. `https://os.kraftwerk.io/mcp` nimmt den XID-Access-Token DIREKT: `initialize` und
- *      `tools/list` antworten 200 (volle Werkzeugliste), ein `tools/call` laeuft bis in die
- *      Argumentpruefung durch. Es braucht also gar kein OAuth — nur den Token, den die Flotte
- *      ohnehin hat.
+ *   1. `https://xid.supinfo.de/oidc/auth?...&redirect_uri=http://localhost:61234/callback` answers
+ *      303 and redirects to EXACTLY that URI (the error in the query is only the missing PKCE) — an
+ *      authorization server validates the redirect_uri BEFORE redirecting, so the client `mcp_kos`
+ *      accepts ANY loopback port. The fixed port was never a requirement of the auth server.
+ *   2. `https://os.kraftwerk.io/mcp` takes the XID access token DIRECTLY: `initialize` and
+ *      `tools/list` answer 200 (the full tool list), and a `tools/call` runs into the argument
+ *      validation. So no OAuth is needed at all — only the token the fleet already has.
  *
- * Der Token kommt aus demselben Helfer wie ueberall sonst (`xiam-token.ps1`/`.sh`; derselbe Aufruf
- * wie in `kwos-session-bus/server/auth.js`) — EINE Quelle, kein zweiter Anmeldeweg.
+ * The token comes from the same helper as everywhere else (`xiam-token.ps1`/`.sh`; the same call
+ * `kwos-session-bus/server/auth.js` makes) — ONE source, no second login path.
  *
- * AUSGABE: genau ein JSON-Objekt mit den Kopfzeilen auf stdout, sonst nichts. Bei einem Fehlschlag
- * `{}` und Exit 1 (dieselbe Form wie `bootstrap/xiam-mcp-headers.ps1` im litellm-Repo), damit Claude
- * Code den Server als nicht verbunden zeigt, statt mit erfundenen Kopfzeilen anzufragen.
+ * OUTPUT: exactly one JSON object with the headers on stdout, nothing else. On failure `{}` and
+ * exit 1 (the same shape as `bootstrap/xiam-mcp-headers.ps1` in the litellm repo), so Claude Code
+ * shows the server as not connected instead of asking with invented headers.
  *
- * KEIN BROWSER, NIE: der Helfer laeuft im Hintergrund (MCP-Verbindung, Reconnect) und darf keinen
- * Anmeldedialog aufreissen — `XIAM_REFRESH_ONLY=1` erzwingt das, genau wie beim Session-Bus. Wer
- * angemeldet ist, hat einen Refresh-Token-Cache; wer es nicht ist, bekommt eine Zeile auf stderr
- * statt eines Fensters mitten in der Arbeit.
+ * NO BROWSER, EVER: the helper runs in the background (MCP connect, reconnect) and must not open a
+ * login dialog — `XIAM_REFRESH_ONLY=1` enforces that, exactly as in the session bus. Whoever is
+ * logged in has a refresh-token cache; whoever is not gets a line on stderr instead of a window in
+ * the middle of their work.
  *
- * X-PLAT, und warum genau SO:
+ * CROSS-PLATFORM, and why it is done THIS way:
  *
- *   * Claude Code ruft einen `headersHelper` als KOMMANDOZEILE auf (`sh -c <headersHelper>` auf
- *     POSIX, die Entsprechung auf Windows) — deshalb steht in `.mcp.json` `node "<pfad>"` und nicht
- *     ein nackter Skriptpfad: so braucht nichts ein Exec-Bit (das eine Windows-Arbeitskopie oder ein
- *     Tarball ohnehin nicht zuverlaessig traegt), und der Pfad ist QUOTIERT, weil ein
- *     Benutzerverzeichnis ein Leerzeichen enthalten darf.
- *   * EIN Einstiegspunkt fuer alle drei Plattformen: `.mcp.json` ist statisches JSON, es kann nicht
- *     je Plattform ein anderes Kommando nennen. Node ist in dieser Umgebung ohnehin Voraussetzung
- *     (das Schwester-Plugin `kwos-session-bus` IST ein Node-MCP-Server, und das Launcher-Gate der
- *     Flotte verlangt Node).
- *   * Der Token-Helfer wird JE PLATTFORM gerufen: `powershell -File …ps1` auf Windows, `bash …sh`
- *     sonst — derselbe Aufruf wie in `kwos-session-bus/server/auth.js`. `bash` und nicht `sh`:
- *     `xiam-token.sh` traegt `#!/usr/bin/env bash`, und auf Debian/Ubuntu ist `sh` ein `dash`.
- *   * Beide Aufrufe uebergeben den Pfad als EIGENES Argument (kein Shell-String), damit Leerzeichen
- *     im Pfad nirgends zu einer zweiten Zerlegung fuehren.
+ *   * Claude Code runs a `headersHelper` as a COMMAND LINE (`sh -c <headersHelper>` on POSIX, the
+ *     equivalent on Windows) — which is why `.mcp.json` says `node "<path>"` and not a bare script
+ *     path: nothing needs an exec bit (which a Windows checkout or a tarball does not carry
+ *     reliably anyway), and the path is QUOTED because a user directory may contain a space.
+ *   * ONE entry point for all three platforms: `.mcp.json` is static JSON and cannot name a
+ *     different command per platform. Node is a given in this environment (the sibling plugin
+ *     `kwos-session-bus` IS a Node MCP server, and the fleet's launcher gate requires Node).
+ *   * The token helper is called PER PLATFORM: `powershell -File …ps1` on Windows, `bash …sh`
+ *     otherwise — the same call as in `kwos-session-bus/server/auth.js`. `bash` and not `sh`:
+ *     `xiam-token.sh` carries `#!/usr/bin/env bash`, and on Debian/Ubuntu `sh` is `dash`.
+ *   * Both calls pass the path as its OWN argv element (never a shell string), so a space in the
+ *     path cannot be split a second time.
  */
 
 import { spawnSync } from "node:child_process";
@@ -54,12 +51,12 @@ import { existsSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 
-/** Wie lange der Token-Helfer hoechstens braucht — danach gilt er als nicht erreichbar. */
+/** How long the token helper may take — after that it counts as unreachable. */
 const HELPER_TIMEOUT_MS = 20_000;
 
 const isWindows = platform() === "win32";
 
-/** Derselbe Pfad und dieselben Uebersteuerungen wie im Session-Bus: EIN Vokabular. */
+/** The same path and the same overrides as the session bus: ONE vocabulary. */
 const helperPath =
   process.env.KWOS_XID_TOKEN_HELPER_PATH ||
   join(homedir(), ".config", "kraftwerk", isWindows ? "xiam-token.ps1" : "xiam-token.sh");
@@ -73,7 +70,7 @@ function fail(reason) {
 function accessToken() {
   const override = (process.env.KWOS_XID_ACCESS_TOKEN || "").trim();
   if (override !== "") return override;
-  if (!existsSync(helperPath)) fail(`Token-Helfer nicht gefunden: ${helperPath}`);
+  if (!existsSync(helperPath)) fail(`token helper not found: ${helperPath}`);
 
   const [command, args] = isWindows
     ? ["powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helperPath]]
@@ -83,17 +80,17 @@ function accessToken() {
     encoding: "utf8",
     timeout: HELPER_TIMEOUT_MS,
   });
-  if (result.error) fail(`${command} liess sich nicht starten: ${result.error.message}`);
+  if (result.error) fail(`${command} could not be started: ${result.error.message}`);
   if (result.status !== 0) {
-    fail(`${helperPath} endete mit ${result.status}: ${(result.stderr || "").trim()}`);
+    fail(`${helperPath} exited with ${result.status}: ${(result.stderr || "").trim()}`);
   }
   const token = (result.stdout || "").trim();
-  if (token === "") fail(`${helperPath} lieferte keinen Token`);
+  if (token === "") fail(`${helperPath} returned no token`);
   return token;
 }
 
 const headers = { Authorization: `Bearer ${accessToken()}` };
-/** Die Workitem-Nummer, wenn die Sitzung eine hat — kw/OS ordnet damit zu, woran das gehoert. */
+/** The workitem, when the session has one — kw/OS attributes what this belongs to with it. */
 const workitem = (process.env.KWOS_WORKITEM || "").trim();
 if (workitem !== "") headers["X-KWOS-Workitem"] = workitem;
 
