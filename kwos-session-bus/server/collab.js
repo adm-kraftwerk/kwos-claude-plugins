@@ -9,6 +9,7 @@
 // was removed from.
 import { config } from "./config.js";
 import { getAccessToken } from "./auth.js";
+import { rememberOwnHumanLine } from "./ownHumanLines.js";
 import { call } from "./relay-client.js";
 
 /** GET /v1/collabs -> every collab this login is a member of (joined or invited). */
@@ -115,6 +116,9 @@ export async function sendCollabMessage(collabId, text, attachmentId = null, fro
       ...(attachmentId ? { attachment_id: attachmentId } : {}),
     },
   });
+  // A line we relayed as the human comes back to us looking exactly like the human's own (s.
+  // `ownHumanLines.js`), so it is named here while we still know which line it was.
+  if (fromHuman) rememberOwnHumanLine(data?.message?.seq);
   return data ?? {};
 }
 
@@ -152,12 +156,23 @@ export async function listLeases(collabId) {
   return Array.isArray(data?.leases) ? data.leases : [];
 }
 
-/** POST /v1/collabs/{id}/leases -- reserve a section (advisory; 409 names the holder). */
-export async function acquireLease(collabId, { subjectId, section, ttlSec, exclusive, reason }) {
+/**
+ * POST /v1/collabs/{id}/leases -- reserve a section (advisory; 409 names the holder).
+ *
+ * The Gegenstand is named EITHER by `subjectId` (a row the caller already holds, from
+ * `collab_status`) OR by `subject {kind, ref}` -- the document itself (WI 11482928, field report
+ * 2026-10-20). The second spelling is the one that keeps the human out of it: whoever is writing
+ * in a document knows which document it is, and the relay creates the row when it is new.
+ *
+ * A `ref` is an IDENTITY and not a local path: for a file, the path INSIDE the repository with
+ * forward slashes. The relay refuses the backslashes of a Windows path for exactly that reason.
+ */
+export async function acquireLease(collabId, { subjectId, subject, section, ttlSec, exclusive, reason }) {
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/leases`, {
     method: "POST",
     body: {
-      subject_id: subjectId,
+      ...(subjectId ? { subject_id: subjectId } : {}),
+      ...(subject ? { subject } : {}),
       section,
       ...(ttlSec ? { ttl_sec: ttlSec } : {}),
       ...(exclusive === false ? { exclusive: false } : {}),

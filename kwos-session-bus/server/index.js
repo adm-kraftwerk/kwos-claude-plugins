@@ -215,17 +215,40 @@ export const TOOLS = [
       "eine begrenzte Zeit. Beratend, nicht erzwingend: hält jemand anderes den Abschnitt, kommt " +
       "eine Antwort mit dem Halter statt einer Reservierung -- dann den Abschnitt nur LESEN und " +
       "Befunde in den Kanal schreiben. Gegen Überschreiben schützt die Versionsprüfung des " +
-      "Zielsystems.",
+      "Zielsystems.\n" +
+      "Den Gegenstand BENENNST DU SELBST (`subject_kind` + `subject_ref`): du weißt als einziger, " +
+      "an welcher Datei, welchem MR, welchem Wiki- oder DMS-Eintrag du schreibst, und der Kanal " +
+      "legt ihn an, wenn es ihn noch nicht gibt. Frag den Menschen NICHTS dazu -- er hat dafür " +
+      "keinen Knopf. `subject_id` aus collab_status geht weiter, braucht aber einen Gegenstand, " +
+      "der schon da ist.\n" +
+      "FÜR QUELLCODE RESERVIERST DU NICHTS: eine Datei sperrt niemand, Konflikte löst git. " +
+      "Reservierungen sind für Abschnitte von Dokumenten, die von Hand geschrieben werden.",
     inputSchema: {
       type: "object",
       properties: {
-        subject_id: { type: "string", description: "UUID des Gegenstands (subject_id aus collab_status)" },
+        subject_kind: {
+          type: "string",
+          enum: ["workitem_md", "wiki", "dms", "file", "mr"],
+          description: "Art des Gegenstands, den du benennst: workitem_md (Text des Workitems), wiki, dms, file (Datei im Repo), mr",
+        },
+        subject_ref: {
+          type: "string",
+          description:
+            "Der Gegenstand selbst: bei file der Pfad IM REPO mit Vorwärtsstrichen " +
+            "(kwterm/node/src/agent.ts), bei mr die MR-URL, bei wiki/dms die ID. NIE ein Pfad " +
+            "deines Rechners -- sonst zeigen zwei Rechner auf zwei Gegenstände, die sich nie treffen.",
+        },
+        subject_title: { type: "string", description: "Optional: wie der Gegenstand im Kanal heißen soll" },
+        subject_id: {
+          type: "string",
+          description: "UUID eines Gegenstands, der schon im Kanal steht (subject_id aus collab_status) -- nur, wenn du ihn nicht selbst benennst",
+        },
         section: { type: "string", description: "Der Abschnitt, z. B. '## Preisblatt' oder ein Dateipfad" },
         ttl_sec: { type: "integer", description: "Reservierungsdauer in Sekunden (Standard 1800, max 28800)" },
         reason: { type: "string", description: "Optional: was du dort tust" },
         collab_id: { type: "string", description: "Nur nötig, wenn diese Session in mehreren Kanälen ist" },
       },
-      required: ["subject_id", "section"],
+      required: ["section"],
       additionalProperties: false,
     },
   },
@@ -458,8 +481,16 @@ export async function handleToolCall(name, args = {}) {
     }
     case "collab_lease": {
       const c = await collab.resolveCollab(args.collab_id);
+      // The Gegenstand is named by the caller (kind + ref) or taken from the channel (id). A KIND
+      // without a REF is not a name -- `acquireLease` sends only what is complete, and the relay
+      // answers 400 for "you named nothing", which is the right sentence for it.
+      const named =
+        args.subject_kind && args.subject_ref
+          ? { kind: args.subject_kind, ref: args.subject_ref, ...(args.subject_title ? { title: args.subject_title } : {}) }
+          : undefined;
       const { lease } = await collab.acquireLease(c.collab_id, {
         subjectId: args.subject_id,
+        subject: named,
         section: args.section,
         ttlSec: args.ttl_sec,
         reason: args.reason,
