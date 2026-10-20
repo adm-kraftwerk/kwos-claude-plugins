@@ -18,6 +18,24 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
     anderen Personen bzw. deren Agenten; das Prompt-Fragment im litellm-Repo
     (`bootstrap/kwos-collab-system-prompt.md`) sagt dem Agenten genau das. Einladen, Rauswerfen,
     Übergeben und Schließen sind bewusst NICHT dabei: das sind Handlungen eines Menschen.
+  - `collab_code_*` (WI 11517979): **Code-Austausch** im Kanal. Mehrere Sitzungen arbeiten am selben
+    Branch, jede in ihrem eigenen Worktree; ihre Arbeitsstände reisen ohne Commit und Push.
+    - Ein Stand ist ein Commit unter `refs/kwcollab/<collab>/out`, gebaut mit eigenem Index und
+      `git commit-tree` (HEAD, Index und Commit-Hooks des Nutzers bleiben unberührt).
+    - Die anderen holen ihn per `git fetch` live durch den Relay vom `upload-pack` dieser Sitzung
+      (der Monitor hält dafür einen Rückkanal offen; sichtbar ist nur der eine Ref), sonst aus dem
+      Git-Bundle, das jede Veröffentlichung beim Relay hinterlegt.
+    - Zusammengeführt wird mit `git merge-tree`; bei einem Konflikt steht fest, wer ihn löst.
+      Widersprechen sich zwei Absichten, fragt `collab_code_escalate` die Menschen (auch per Push).
+    - Hooks: `Stop` veröffentlicht und gleicht ab (eine Zeile Zusammenfassung), `PreToolUse` hält
+      eine Änderung an, solange ein fremder Stand dieselbe Datei geändert hat und noch fehlt. Beide
+      steigen ohne Netz sofort aus, wenn der Ring nicht freigibt oder der Worktree nicht im
+      Code-Modus ist (`<git-dir>/kwcollab/state.json`).
+    - Das Plugin schreibt nichts nach kw/OS. Spec und Entscheidungen liefert das Gateway
+      (`GET /v1/collabs/:id/code/memory`), ins Workitem kommen die Entscheidungen einmal mit dem
+      Abschlusskommentar.
+    - Git 2.40 oder neuer. Ende-zu-Ende-Test gegen einen echten Relay:
+      `RELAY_DIR=<litellm>/relay DATABASE_URL=… node tests/e2e/codeExchange.e2e.mjs`.
   - `collab_accept(collab_id?)`: tritt dem Kanal mit DIESER Sitzung bei — die Session-ID kennt nur
     sie selbst, und der Relay nimmt nur eine Sitzung an, die dem Aufrufer gehört. Steht
     `KWOS_COLLAB` in der Umgebung (eine Sitzung, die AUS einer Einladung entsteht), tritt sie beim

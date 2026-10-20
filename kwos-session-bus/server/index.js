@@ -10,6 +10,7 @@ import * as collab from "./collab.js";
 // path reads it (collab-listen.js, `collabReleased`): the launcher exports it, so the tools and the
 // monitor cannot disagree about it.
 import { collabReleased } from "./collab-listen.js";
+import { CODE_TOOLS, CODE_TOOL_NAMES, handleCodeTool } from "./codeTools.js";
 
 const COLLAB_TOOL_PREFIX = "collab_";
 
@@ -284,10 +285,12 @@ export const TOOLS = [
       additionalProperties: false,
     },
   },
+  // Code exchange (WI 11517979): own file, same `collab_` gate.
+  ...CODE_TOOLS,
 ];
 
 const server = new Server(
-  { name: "kwos-session-bus", version: "0.4.2" },
+  { name: "kwos-session-bus", version: "0.5.0" },
   { capabilities: { tools: {} } }
 );
 
@@ -358,6 +361,7 @@ export async function handleToolCall(name, args = {}) {
   if (REMOTE_ONLY_TOOLS.has(name) && !remoteActive()) {
     throw new Error(name + " gibt es nur in einer Remote-Control-Sitzung (--kwremote) -- dieser Mensch sitzt am Terminal, frag dort.");
   }
+  if (CODE_TOOL_NAMES.has(name)) return handleCodeTool(name, args);
   switch (name) {
     case "list_sessions": {
       const sessions = await relay.listSessions();
