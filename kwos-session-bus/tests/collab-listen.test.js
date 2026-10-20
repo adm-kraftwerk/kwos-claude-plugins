@@ -171,6 +171,38 @@ test("stdin ohne Kanal (/dev/null): der Empfang lebt weiter und die Zeile kommt 
   }
 });
 
+// Eine Zeile, die DIESE Sitzung als WORTE DES MENSCHEN weitergereicht hat. Sie kommt mit der
+// eigenen session_id zurueck und ist als `human` gestempelt -- genau wie eine Zeile, die der Mensch
+// in der Kanal-Ansicht dieser Pane tippt. Unterschieden wird ueber die Nummer (`ownHumanLines.js`).
+//
+// Das JSON und nicht der ganze SSE-Rahmen: `frameToLine` bekommt den `data`-Teil (es parst ihn).
+const ownRelayed = (seq) =>
+  JSON.stringify({
+    seq, collab_id: COLLAB, from_subject: "u-mara", from_session: SESSION, author_kind: "human", text: "Frage von Steffen an Tim",
+  });
+
+test("frameToLine: die selbst weitergereichte Zeile wird verschluckt, die des Menschen nicht", async () => {
+  const { frameToLine } = await import("../server/collab-listen.js");
+  const { rememberOwnHumanLine, forgetOwnHumanLines } = await import("../server/ownHumanLines.js");
+  const seen = { selfSessionId: SESSION, collabId: COLLAB, after: 0 };
+  forgetOwnHumanLines();
+
+  // Der Mensch tippt in der Kanal-Ansicht DIESER Pane: `from_session` ist unsere eigene -- und die
+  // Zeile MUSS ankommen, sonst faellt genau der Fall weg, fuer den die Ausnahme gebaut wurde.
+  assert.ok(frameToLine(ownRelayed(8), seen), "die Zeile des Menschen in dieser Pane wurde verschluckt");
+
+  // Unsere eigene, weitergegebene Zeile dagegen nicht: der Sendeweg hat ihre Nummer gemerkt.
+  rememberOwnHumanLine(7);
+  assert.equal(
+    frameToLine(ownRelayed(7), seen),
+    null,
+    "die eigene Zeile wurde zurueckgespielt und die Sitzung antwortet sich selbst",
+  );
+  // ... und die Nummer ist damit VERBRAUCHT: die Sperre gilt fuer die eine Zustellung, nicht fuer
+  // jede Nummer, die spaeter zufaellig dieselbe ist.
+  assert.ok(frameToLine(ownRelayed(7), seen), "die Nummer wurde fuer immer gesperrt");
+});
+
 test("stdin MIT Kanal: sein EOF beendet den Empfang weiterhin", async () => {
   const mock = installFetchMock((url, init) =>
     url.includes("/events") ? sseResponse(FRAME, init?.signal) : jsonResponse({ collabs: [collabRow()] }));

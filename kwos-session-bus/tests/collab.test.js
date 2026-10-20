@@ -165,6 +165,40 @@ test("acquireLease: schickt Abschnitt and TTL, ohne exclusive zu setzen (Server-
   } finally { mock.restore(); }
 });
 
+test("acquireLease: der Aufrufer BENENNT den Gegenstand, statt einen zu suchen", async () => {
+  // Feldmeldung 2026-10-20: der Agent konnte einen Gegenstand nicht anlegen, und der Mensch, den
+  // er danach fragte, hatte dafuer keinen Knopf. Wer in ein Dokument schreibt, weiss welches es
+  // ist -- `subject_kind` + `subject_ref` gehen so hinaus, der Relay legt die Zeile an.
+  const mock = installFetchMock(() => jsonResponse({ lease: { lease_id: "l1", section: "## Preisblatt" } }, 201));
+  try {
+    await collab.acquireLease("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", {
+      subject: { kind: "file", ref: "kwterm/node/src/agent.ts", title: "agent.ts" },
+      section: "## Preisblatt",
+    });
+    const body = JSON.parse(mock.calls[0].init.body);
+    assert.deepEqual(body, {
+      subject: { kind: "file", ref: "kwterm/node/src/agent.ts", title: "agent.ts" },
+      section: "## Preisblatt",
+    });
+    assert.equal("subject_id" in body, false, "ein leerer subject_id ging mit hinaus");
+  } finally { mock.restore(); }
+});
+
+test("sendCollabMessage: die eigene Menschen-Zeile wird gemerkt, sonst nichts", async () => {
+  const { takeOwnHumanLine, forgetOwnHumanLines } = await import("../server/ownHumanLines.js");
+  forgetOwnHumanLines();
+  const mock = installFetchMock(() => jsonResponse({ message: { seq: 3 }, claude_streak: 0 }, 201));
+  try {
+    // Als AGENT geschrieben: die wirft der Empfang ohnehin ueber `from_session` weg.
+    await collab.sendCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", "Befund");
+    assert.equal(takeOwnHumanLine(3), false, "eine Agenten-Zeile wurde gemerkt");
+
+    // Als MENSCH weitergereicht: genau die kaeme sonst als Monitor-Zeile zurueck.
+    await collab.sendCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", "Frage von Steffen", null, true);
+    assert.equal(takeOwnHumanLine(3), true, "die eigene Menschen-Zeile wurde nicht gemerkt");
+  } finally { mock.restore(); }
+});
+
 test("releaseLease: DELETE auf die Lease-URL", async () => {
   const mock = installFetchMock(() => Promise.resolve({ ok: true, status: 204, headers: { get: () => null } }));
   try {
