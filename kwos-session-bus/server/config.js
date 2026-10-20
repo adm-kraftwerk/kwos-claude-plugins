@@ -47,6 +47,31 @@ const TOKEN_OVERRIDE = process.env.KWOS_XID_ACCESS_TOKEN;
 //    is last-writer-wins, and two sessions in the same directory would share it. `refreshSessionId`
 //    below is what turns the file into the re-bind after `/clear`.
 //
+// The process working directory, or null when the platform refuses to report it.
+//
+// macOS answers EPERM (not ENOENT) when the directory was deleted or the process lost access to
+// it -- a hook started from a worktree-isolated session, for example. `process.cwd()` throws, and
+// here it was called at MODULE LOAD (displayName and channels derive from it), so the plugin died
+// before the first line of the hook ran: every Stop/SubagentStop turned into a red hook error
+// (WI 11523603). Nothing in this plugin needs the caller's working directory -- session id and
+// configuration come from the environment -- so its absence must cost a generic display name, not
+// the process. Same safeguard as `cd_readable()` in xiam-token.sh (WI 11420094): HOME, then
+// $TMPDIR, then /. The chdir repairs later path queries (child processes, fs); the value stays
+// null, so the marker search does not quietly run against a directory this process never started in.
+function readProcessCwd() {
+  try {
+    return process.cwd();
+  } catch {
+    for (const dir of [homedir(), process.env.TMPDIR, "/"]) {
+      if (!dir) continue;
+      try { process.chdir(dir); break; } catch { /* try the next one */ }
+    }
+    return null;
+  }
+}
+
+export const sessionCwd = readProcessCwd();
+
 // Order: own marker (short poll -- the hook and this process start independently) -> frozen env ->
 // legacy per-directory marker (older hooks) -> generated UUID with a loud warning.
 export function findMarker(startDir, relativeFile) {
@@ -66,7 +91,7 @@ export function findMarker(startDir, relativeFile) {
 }
 
 const OWN_MARKER_NAME = clientMarkerName(process.env.KWOS_CLIENT_ID);
-const ownMarker = () => (OWN_MARKER_NAME ? findMarker(process.cwd(), join(MARKER_DIR, OWN_MARKER_NAME)) : null);
+const ownMarker = () => (OWN_MARKER_NAME && sessionCwd ? findMarker(sessionCwd, join(MARKER_DIR, OWN_MARKER_NAME)) : null);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -125,19 +150,25 @@ async function resolveSessionId() {
   // Own marker first: it is the only source that stays true across /clear and --resume. Short poll
   // only (4 x 500ms) -- the frozen env value below is right at process start anyway, so a hook that
   // is slow to write must not delay a working session; `refreshSessionId` picks it up later.
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const own = ownMarker();
-    if (own) return own.id;
-    await sleep(500);
+  // Without a readable cwd there is no directory to search, and the wait would be pointless: the
+  // env value below is the right answer for a process that only wants to finish its hook.
+  if (sessionCwd) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const own = ownMarker();
+      if (own) return own.id;
+      await sleep(500);
+    }
   }
 
   const fromEnv = process.env.CLAUDE_CODE_SESSION_ID;
   if (fromEnv) return fromEnv;
 
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const legacy = findMarker(process.cwd(), LEGACY_MARKER_FILE);
-    if (legacy) return legacy.id;
-    await sleep(500);
+  if (sessionCwd) {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const legacy = findMarker(sessionCwd, LEGACY_MARKER_FILE);
+      if (legacy) return legacy.id;
+      await sleep(500);
+    }
   }
 
   const generated = randomUUID();
@@ -154,8 +185,8 @@ export const config = {
   tokenHelperPath: TOKEN_HELPER_PATH,
   tokenOverride: TOKEN_OVERRIDE,
   sessionId: undefined,
-  displayName: process.env.KWOS_SESSION_DISPLAY_NAME || readClaudeSessionName() || deriveDisplayName(process.cwd()),
-  channels: deriveChannels(process.cwd()),
+  displayName: process.env.KWOS_SESSION_DISPLAY_NAME || readClaudeSessionName() || deriveDisplayName(sessionCwd),
+  channels: deriveChannels(sessionCwd),
   heartbeatIntervalMs: 5 * 60 * 1000, // Vorschlag Server-Spec §3.1: alle 5 Min
   // How often a long-running process re-reads its own marker. The file is a few bytes and the check
   // is one stat+read; 5s costs nothing and bounds how long a /clear can go unnoticed. Same interval

@@ -37,7 +37,7 @@
 
 import { fileURLToPath } from "node:url";
 import { fstatSync } from "node:fs";
-import { config, ensureSessionId, refreshSessionId, readCheckInterval } from "./config.js";
+import { config, ensureSessionId, refreshSessionId, readCheckInterval, sessionCwd } from "./config.js";
 import { log } from "./log.js";
 import { runSseReceiver } from "./sse-receiver.js";
 import { readCursor, rememberCursor } from "./collabCursor.js";
@@ -243,7 +243,9 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
   // Code exchange (WI 11517979): serve this worktree's snapshots while it is in code mode, and read
   // the own mandate's `wake`. Only where the worktree has joined -- a local file test first, the
   // relay only after it -- so the hundreds of sessions without code mode pay nothing for it.
-  const code = codeServing ? codeServing({ cwd: process.cwd() }) : null;
+  // A cwd the platform refuses to report must not take the monitor down; null simply means "no
+  // worktree here" and codeServing's local test finds no state (WI 11523603).
+  const code = codeServing ? codeServing({ cwd: sessionCwd }) : null;
 
   // The channels THIS session holds on the relay, as of the last poll that reached the relay. Kept
   // next to `open` because a channel can be joined a moment before its stream is up: a `/clear` in

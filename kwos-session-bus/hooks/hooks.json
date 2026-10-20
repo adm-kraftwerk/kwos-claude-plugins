@@ -7,7 +7,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/write-session-id.js\"",
+            "command": "cd \"$HOME\" 2>/dev/null || cd /; node \"${CLAUDE_PLUGIN_ROOT}/hooks/write-session-id.js\"",
             "timeout": 10
           }
         ]
@@ -20,7 +20,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/code-hook.js\" stop",
+            "command": "cd \"$HOME\" 2>/dev/null || cd /; node \"${CLAUDE_PLUGIN_ROOT}/hooks/code-hook.js\" stop",
             "timeout": 120
           }
         ]
@@ -33,7 +33,7 @@
           {
             "type": "command",
             "shell": "bash",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/code-hook.js\" pretooluse",
+            "command": "cd \"$HOME\" 2>/dev/null || cd /; node \"${CLAUDE_PLUGIN_ROOT}/hooks/code-hook.js\" pretooluse",
             "timeout": 15
           }
         ]
