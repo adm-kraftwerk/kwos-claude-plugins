@@ -88,4 +88,18 @@ async function main() {
 
 // Exit only after stdout is flushed: on a pipe, process.exit() right after write() can cut the
 // JSON the harness reads (review finding 2026-10-20). An empty write's callback is the flush point.
-main().catch(() => {}).finally(() => process.stdout.write("", () => process.exit(0)));
+//
+// AND A FAILURE THAT NEVER REACHED A try/catch IS SAID OUT LOUD (WI 11523603). The first such
+// failure is the dynamic import above: a partial plugin update -- a missing or half-written
+// codeRuntime.js, its imports, or a module that throws while loading -- rejects main() BEFORE the
+// inner catches exist. With an empty handler that was exit 0 and NOT ONE LINE, so a dead hook looked
+// exactly like a quiet turn end, which is the one thing this file promises never to be. One
+// systemMessage with the reason (both modes' output supports it), a copy on stderr for the log, and
+// still exit 0: the hook never blocks a turn.
+main()
+  .catch((err) => {
+    const reason = err?.message || String(err);
+    try { process.stderr.write(`kwcollab: Hook abgebrochen: ${reason}\n`); } catch { /* stderr closed */ }
+    try { process.stdout.write(JSON.stringify({ systemMessage: `kwcollab: Hook abgebrochen (${reason}) -- der Code-Austausch dieser Runde fand nicht statt.` })); } catch { /* stdout closed */ }
+  })
+  .finally(() => process.stdout.write("", () => process.exit(0)));

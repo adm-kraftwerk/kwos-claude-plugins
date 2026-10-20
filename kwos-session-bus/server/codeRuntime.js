@@ -7,10 +7,11 @@
 //   me       -- my login IN that channel: the member whose session_id is this session's
 //   mandate  -- what my agent may do without asking (stored on the relay, set at join)
 //
-// The worktree is the session's working directory (process.cwd() for the MCP server and the
-// monitor, the hook payload's `cwd` for a hook).
+// The worktree is the session's working directory: `sessionCwd` -- the value config.js read ONCE at
+// start -- for the MCP server and the monitor, the hook payload's `cwd` for a hook. Never
+// process.cwd(): see codeContext.
 
-import { config, ensureSessionId } from "./config.js";
+import { config, ensureSessionId, sessionCwd } from "./config.js";
 import { getAccessToken } from "./auth.js";
 import * as collab from "./collab.js";
 import * as flow from "./codeExchange.js";
@@ -30,7 +31,16 @@ export function fetchLive() {
  * mode": the hooks run after every turn in every session and must stay silent where there is
  * nothing to do.
  */
-export async function codeContext({ cwd = process.cwd(), collabId } = {}) {
+export async function codeContext({ cwd = sessionCwd, collabId } = {}) {
+  // A worktree the session could not name is not a worktree to guess at (WI 11523603). Nothing here
+  // needs process.cwd(): where it cannot be read, config.js chdirs to a fallback to keep later path
+  // queries working -- so process.cwd() answers with $HOME or /, and a `git rev-parse` there would
+  // describe a repository this session never worked in (measured: the tool call then went to the
+  // relay with the fallback directory and answered "fetch failed"). null is the honest answer: no
+  // worktree, so no collab in it -- and the caller gets a reason instead of a throw.
+  if (!cwd) {
+    return { active: false, reason: "Das Arbeitsverzeichnis dieser Sitzung ist nicht lesbar -- ohne es ist kein Worktree zu bestimmen." };
+  }
   await ensureSessionId();
   // The worktree knows which collab it exchanges code in (its kwcollab/state.json): that answer
   // beats "the one channel this session is in", which has no answer when the session is in two.

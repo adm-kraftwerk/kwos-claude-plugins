@@ -17420,7 +17420,10 @@ function relay() {
 function fetchLive() {
   return makeFetchLive({ relayUrl: config2.relayUrl, getToken: getAccessToken });
 }
-async function codeContext({ cwd: cwd2 = process.cwd(), collabId } = {}) {
+async function codeContext({ cwd: cwd2 = sessionCwd, collabId } = {}) {
+  if (!cwd2) {
+    return { active: false, reason: "Das Arbeitsverzeichnis dieser Sitzung ist nicht lesbar -- ohne es ist kein Worktree zu bestimmen." };
+  }
   await ensureSessionId();
   let local = null;
   try {
@@ -17575,7 +17578,7 @@ var CODE_TOOLS = [
 var CODE_TOOL_NAMES = new Set(CODE_TOOLS.map((t) => t.name));
 var text = (t) => ({ content: [{ type: "text", text: t }] });
 var json = (v) => text(JSON.stringify(v, null, 2));
-var cwd = () => process.cwd();
+var cwd = () => sessionCwd;
 async function ctxOrThrow(args, { needActive = true } = {}) {
   const ctx = await codeContext({ cwd: cwd(), collabId: args.collab_id });
   if (!ctx.collab) throw new Error(ctx.reason || "Kein Collab.");

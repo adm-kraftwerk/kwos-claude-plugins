@@ -9,6 +9,7 @@
 
 import * as flow from "./codeExchange.js";
 import { codeContext, relay, fetchLive } from "./codeRuntime.js";
+import { sessionCwd } from "./config.js";
 
 const COLLAB_ID = { type: "string", description: "Nur nötig, wenn diese Session in mehreren Kanälen ist" };
 const MANDATE = {
@@ -151,7 +152,14 @@ export const CODE_TOOL_NAMES = new Set(CODE_TOOLS.map((t) => t.name));
 
 const text = (t) => ({ content: [{ type: "text", text: t }] });
 const json = (v) => text(JSON.stringify(v, null, 2));
-const cwd = () => process.cwd();
+
+// The worktree these tools work on: the directory config.js read ONCE at start, not process.cwd().
+// The server is long-lived and every branch below asks for the worktree at call time; process.cwd()
+// is a second read of a global that, in a session whose directory became unreadable, answers with
+// config.js's repair fallback ($HOME, $TMPDIR, /) -- a repository this session never worked in.
+// `sessionCwd` is null there, and codeContext turns that into "no worktree", not into a guess
+// (WI 11523603).
+const cwd = () => sessionCwd;
 
 async function ctxOrThrow(args, { needActive = true } = {}) {
   const ctx = await codeContext({ cwd: cwd(), collabId: args.collab_id });

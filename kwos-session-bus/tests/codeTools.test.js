@@ -2,8 +2,8 @@
 // the tool gate, the wake rule, the edit precheck, the summary line, and the hook's fast exit.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,9 @@ const { editBlocker } = await import("../server/codeRuntime.js");
 const { summaryLine } = await import("../server/codeExchange.js");
 
 const HOOK = fileURLToPath(new URL("../hooks/code-hook.js", import.meta.url));
+const PLUGIN_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const INDEX_URL = new URL("../server/index.js", import.meta.url).href;
+const RUNTIME_URL = new URL("../server/codeRuntime.js", import.meta.url).href;
 
 test("die Code-Werkzeuge stehen hinter derselben Kanal-Freigabe wie die anderen collab_-Werkzeuge", async () => {
   const names = CODE_TOOLS.map((t) => t.name);
@@ -143,4 +146,97 @@ test("der Hook tut ausserhalb des Rings und ausserhalb des Code-Modus nichts -- 
     assert.equal(pre.status, 0);
     assert.equal(pre.stdout, "");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// A hook failure BEFORE the inner try/catch -- the dynamic import of codeRuntime.js, most notably,
+// when a partial plugin update left that file missing or half-written -- used to exit 0 in silence:
+// a dead hook and a quiet turn end looked exactly alike, which is the one thing this file promises
+// never to be (WI 11523603). The reason must reach the human, and the hook must still never block
+// the turn.
+test("a hook failure before its own try/catch is said out loud, not swallowed", () => {
+  const root = mkdtempSync(join(tmpdir(), "kwcode-hook-broken-"));
+  try {
+    // A copy of the plugin, so the missing module is a copy's problem and not this checkout's.
+    const plugin = join(root, "plugin");
+    cpSync(PLUGIN_ROOT, plugin, { recursive: true, filter: (src) => !src.includes("node_modules") });
+    const worktree = join(root, "worktree");
+    mkdirSync(worktree, { recursive: true });
+    spawnSync("git", ["init", "-q"], { cwd: worktree });
+    // In code mode: the hook's local test finds this and goes on to load the runtime.
+    mkdirSync(join(worktree, ".git", "kwcollab"), { recursive: true });
+    writeFileSync(join(worktree, ".git", "kwcollab", "state.json"), "{}", "utf8");
+    // The partial update: the module the hook loads at the end of the turn is not there.
+    rmSync(join(plugin, "server", "codeRuntime.js"));
+
+    const r = spawnSync(process.execPath, [join(plugin, "hooks", "code-hook.js"), "stop"], {
+      input: JSON.stringify({ cwd: worktree, hook_event_name: "Stop" }),
+      encoding: "utf8",
+      env: { ...process.env, KWOS_COLLAB_CANARY: "1", KWOS_RELAY_URL: "http://127.0.0.1:9" },
+      timeout: 20000,
+    });
+
+    assert.equal(r.status, 0, "the hook never blocks a turn");
+    const out = JSON.parse(r.stdout.trim().split("\n").pop());
+    assert.match(out.systemMessage, /Hook abgebrochen/, "the human sees it");
+    assert.match(out.systemMessage, /codeRuntime/, "with the reason, not just 'something failed'");
+    assert.match(r.stderr, /Hook abgebrochen/, "and a line for the log");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// The server is long-lived and asks for the worktree on EVERY collab_code_* call. Where the process
+// could not report its working directory -- a worktree that is gone or lost its permissions --
+// config.js (WI 11523603) chdirs to a fallback so later path queries keep working; process.cwd()
+// therefore answers with THAT ($HOME, $TMPDIR, /). Those are not this session's worktree: the tools
+// must not hand the fallback to codeContext, and where there is no worktree they must say so
+// instead of asking the relay about the wrong directory (measured 2026-10-20 on the unfixed code:
+// the call went to the relay and came back as "Fehler: fetch failed").
+test("with no readable working directory a collab_code_* call answers instead of searching $HOME", () => {
+  const root = mkdtempSync(join(tmpdir(), "kwcode-cwd-"));
+  const child = join(root, "worktree");
+  mkdirSync(child, { recursive: true });
+  const home = mkdtempSync(join(tmpdir(), "kwcode-home-"));
+  const probe = join(home, "probe.mjs");
+  writeFileSync(probe, `
+    const { callTool } = await import(${JSON.stringify(INDEX_URL)});
+    const { codeContext } = await import(${JSON.stringify(RUNTIME_URL)});
+    const bare = await codeContext();                                  // the default, i.e. sessionCwd
+    const r = await callTool({ params: { name: "collab_code_status", arguments: {} } });
+    console.log(JSON.stringify({
+      fallbackCwd: process.cwd(), bare: bare.reason,
+      text: r.content[0].text, isError: Boolean(r.isError),
+    }));
+  `, "utf8");
+
+  // Start the shell INSIDE the directory while it is still reachable, then take the directory's
+  // search permission away (the pattern of tests/config.test.js): shell and node inherit the cwd,
+  // but it can no longer be resolved -- process.cwd() throws at module load.
+  let out;
+  try {
+    out = execFileSync("/bin/sh", ["-c", `chmod 000 "${root}" && "${process.execPath}" "${probe}"; status=$?; chmod 755 "${root}"; exit $status`], {
+      cwd: child,
+      env: {
+        ...process.env,
+        HOME: home,                       // the fallback config.js chdirs to -- not the worktree
+        KWOS_COLLAB_CANARY: "1",
+        KWOS_RELAY_URL: "http://127.0.0.1:9", // nothing listens: reaching it at all is the failure
+        KWOS_XID_ACCESS_TOKEN: "test-token",
+        KWOS_CLIENT_ID: "cli-0000-nocwd",
+        CLAUDE_CODE_SESSION_ID: "session-FROM-ENV",
+      },
+      encoding: "utf8",
+      timeout: 20000,
+    });
+  } finally {
+    try { chmodSync(root, 0o755); } catch { /* the shell restored it already */ }
+  }
+  const r = JSON.parse(out.trim().split("\n").pop());
+  // macOS resolves /var to /private/var: compare against the directory the child sees.
+  const fallback = realpathSync(home);
+
+  assert.equal(r.fallbackCwd, fallback, "the fallback is what a late process.cwd() would answer with");
+  assert.match(r.bare, /Arbeitsverzeichnis dieser Sitzung ist nicht lesbar/, "codeContext asks the session");
+  assert.equal(r.isError, true, "the tool answers with a reason, not a crash");
+  assert.match(r.text, /Arbeitsverzeichnis dieser Sitzung ist nicht lesbar/);
+  assert.doesNotMatch(r.text, /fetch failed|EPERM|EACCES|uv_cwd/, "no relay call, no uv_cwd");
+  assert.ok(!r.text.includes(fallback), "the fallback never stands in for the worktree");
 });
