@@ -12,6 +12,32 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/code-hook.js\" stop",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/code-hook.js\" pretooluse",
+            "timeout": 15
+          }
+        ]
+      }
     ]
   }
 }

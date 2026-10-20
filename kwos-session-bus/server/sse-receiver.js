@@ -23,14 +23,14 @@ const RECONNECT_MAX_MS = 30000;
 // `since` seeds `Last-Event-ID` for the FIRST request, and `onEventId` reports every id that came
 // in. The channel monitor uses both to keep its place across PROCESSES: an in-memory id only
 // survives a reconnect, so a closed and reopened session asked for the whole protocol again.
-export async function runSseReceiver(onMessage, { signal, url = null, since = null, onEventId = null }) {
+export async function runSseReceiver(onMessage, { signal, url = null, since = null, onEventId = null, getToken = getAccessToken }) {
   let lastEventId = since === null || since === undefined ? undefined : String(since);
   let delay = RECONNECT_MIN_MS;
   const endpoint = url || eventsUrl();
 
   while (!signal.aborted) {
     try {
-      const token = await getAccessToken();
+      const token = await getToken();
       const res = await fetch(endpoint, {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -52,12 +52,14 @@ export async function runSseReceiver(onMessage, { signal, url = null, since = nu
         while ((idx = buffer.indexOf("\n\n")) !== -1) {
           const rawEvent = buffer.slice(0, idx);
           buffer = buffer.slice(idx + 2);
-          const { id, data } = parseEvent(rawEvent);
+          const { id, data, event } = parseEvent(rawEvent);
           if (id) {
             lastEventId = id;
             if (onEventId) onEventId(id);
           }
-          if (data) onMessage(data);
+          // The event name goes along for the readers that need it (the code exchange's back
+          // channel, WI 11517979); the existing readers take one argument and ignore it.
+          if (data) onMessage(data, event);
         }
       }
     } catch (err) {
@@ -70,14 +72,16 @@ export async function runSseReceiver(onMessage, { signal, url = null, since = nu
   }
 }
 
-function parseEvent(rawEvent) {
+export function parseEvent(rawEvent) {
   let id;
+  let event;
   const dataLines = [];
   for (const line of rawEvent.split("\n")) {
     if (line.startsWith("id:")) id = line.slice(3).trim();
+    else if (line.startsWith("event:")) event = line.slice(6).trim();
     else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
   }
-  return { id, data: dataLines.length ? dataLines.join("\n") : undefined };
+  return { id, event, data: dataLines.length ? dataLines.join("\n") : undefined };
 }
 
 function sleep(ms, signal) {

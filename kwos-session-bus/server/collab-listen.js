@@ -44,6 +44,7 @@ import { readCursor, rememberCursor } from "./collabCursor.js";
 import { createLineWriter } from "./listen.js";
 import { collabLine, collabClosedLine, senderName } from "./collabLine.js";
 import * as collab from "./collab.js";
+import { codeServing as defaultCodeServing } from "./codeMonitor.js";
 
 // How often the monitor asks which channels this session is in. Short enough that joining feels
 // immediate, long enough that an idle session does not hammer the relay: one small GET.
@@ -124,7 +125,7 @@ function seqOf(raw) {
   }
 }
 
-export function frameToLine(raw, { members = [], selfSessionId = null, collabId = null, after = 0 } = {}) {
+export function frameToLine(raw, { members = [], selfSessionId = null, collabId = null, after = 0, wakeOnCode = true } = {}) {
   let msg;
   try { msg = JSON.parse(raw); } catch { return null; }
   if (!msg || typeof msg !== "object") return null;
@@ -135,6 +136,11 @@ export function frameToLine(raw, { members = [], selfSessionId = null, collabId 
   // The session id alone is NOT enough (s. the file header): the relay stamps a HUMAN message from
   // this pane's channel view with THIS session's id. Only the agent's own contributions go back.
   if (selfSessionId && msg.from_session === selfSessionId && msg.author_kind !== "human") return null;
+  // A code line (WI 11517979) wakes an idle agent only where its human allowed it (mandate `wake`).
+  // Without the wake the state is still taken in -- at the end of the agent's next turn, by the Stop
+  // hook -- and every line costs tokens on the workitem whether anybody is watching or not.
+  // A QUESTION to the humans (`escalate`) is always shown: it is what needs an answer.
+  if (msg.kind === "code" && !wakeOnCode && msg.payload?.type !== "escalate") return null;
   // A message without text is a valid case (a screenshot speaks for itself) -- collabLine names
   // the attachment then.
   return collabLine({
@@ -165,7 +171,7 @@ export function frameToLine(raw, { members = [], selfSessionId = null, collabId 
  * hands this process `/dev/null` (s. the stdin block below), and a test cannot make its OWN stdin
  * the null device. A double that emits `end` the moment it is resumed is what `/dev/null` does.
  */
-export async function startCollabListener({ writeLine, env = process.env, stdin = process.stdin, isChannel = stdinIsChannel } = {}) {
+export async function startCollabListener({ writeLine, env = process.env, stdin = process.stdin, isChannel = stdinIsChannel, codeServing = defaultCodeServing } = {}) {
   // The ring decides (s. collabReleased): outside it this receive path does not run at all -- no
   // poll, no stream, no line. Logged once, because "the channel is silent" and "the channel was
   // never switched on here" look identical from inside a session.
@@ -224,9 +230,14 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
   const open = new Map();
 
   const closeAll = () => {
-    for (const [id, entry] of open) { entry.controller.abort(); }
+    for (const [id, entry] of open) { entry.controller.abort(); code?.drop(id); }
     open.clear();
   };
+
+  // Code exchange (WI 11517979): serve this worktree's snapshots while it is in code mode, and read
+  // the own mandate's `wake`. Only where the worktree has joined -- a local file test first, the
+  // relay only after it -- so the hundreds of sessions without code mode pay nothing for it.
+  const code = codeServing ? codeServing({ cwd: process.cwd() }) : null;
 
   // The channels THIS session holds on the relay, as of the last poll that reached the relay. Kept
   // next to `open` because a channel can be joined a moment before its stream is up: a `/clear` in
@@ -261,7 +272,7 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
     const wanted = new Set(joined.map((c) => c.collab_id));
     lastJoined = wanted;
     for (const [id, entry] of [...open]) {
-      if (!wanted.has(id)) { entry.controller.abort(); open.delete(id); }
+      if (!wanted.has(id)) { entry.controller.abort(); open.delete(id); code?.drop(id); }
     }
     for (const c of joined) {
       const members = Array.isArray(c.members) ? c.members : [];
@@ -271,6 +282,7 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
         // name, and it grows while the channel is open (review finding 2026-10-16 -- the list used
         // to be frozen at the moment the stream was opened, so later joiners stayed logins).
         existing.members = members;
+        await code?.refresh(c.collab_id, existing);
         continue;
       }
       const controller = new AbortController();
@@ -280,6 +292,7 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
       const entry = { controller, members, lastSeq: readCursor(c.collab_id) ?? 0 };
       entry.printedSeq = entry.lastSeq;
       open.set(c.collab_id, entry);
+      await code?.refresh(c.collab_id, entry);
       log.info("Collab-Kanal verbunden.", { collabId: c.collab_id, workitem: c.workitem });
       runSseReceiver(
         (raw) => {
@@ -288,6 +301,7 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
             // Already printed in THIS process: a reconnect must not repeat a line (the receiver
             // resumes by `Last-Event-ID`, this is the second belt for a frame that arrives twice).
             after: entry.printedSeq,
+            wakeOnCode: entry.wake !== false,
           });
           if (!line) return;
           entry.printedSeq = Math.max(entry.printedSeq, seqOf(raw));

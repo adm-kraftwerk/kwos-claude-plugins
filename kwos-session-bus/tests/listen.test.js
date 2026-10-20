@@ -158,7 +158,11 @@ test("Reihenfolge bleibt erhalten, keine Zeile geht verloren", async () => {
   const write = createLineWriter({ write: (s) => written.push(s) }, { spacingMs: 1 });
   const lines = Array.from({ length: 12 }, (_, i) => `z${i}`);
   for (const l of lines) write(l);
-  await new Promise((r) => setTimeout(r, 200));
+  // Wait for the lines, not for a fixed time: 12 lines at 1 ms spacing can need more than 200 ms
+  // when other test files load the machine in the same run (Windows timers tick at ~15 ms; seen
+  // once in a run beside the git-heavy code-exchange tests). The assertion is about ORDER and LOSS,
+  // so the wait has a generous ceiling instead of a tight guess.
+  for (let i = 0; i < 300 && written.length < lines.length; i++) await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(written, lines.map((l) => `${l}\n`));
 });
 
