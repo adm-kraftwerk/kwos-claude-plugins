@@ -3,11 +3,7 @@
     "kraftwerk-os": {
       "type": "http",
       "url": "https://os.kraftwerk.io/mcp",
-      "oauth": {
-        "clientId": "mcp_kos",
-        "authServerMetadataUrl": "https://xid.supinfo.de/.well-known/openid-configuration",
-        "callbackPort": 54545
-      }
+      "headersHelper": "node ${CLAUDE_PLUGIN_ROOT}/scripts/mcp-headers.mjs"
     },
     "bc365": {
       "type": "http",
