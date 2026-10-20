@@ -159,7 +159,7 @@ export async function listLeases(collabId) {
 /**
  * POST /v1/collabs/{id}/leases -- reserve a section (advisory; 409 names the holder).
  *
- * The Gegenstand is named EITHER by `subjectId` (a row the caller already holds, from
+ * The document is named EITHER by `subjectId` (a row the caller already holds, from
  * `collab_status`) OR by `subject {kind, ref}` -- the document itself (WI 11482928, field report
  * 2026-10-20). The second spelling is the one that keeps the human out of it: whoever is writing
  * in a document knows which document it is, and the relay creates the row when it is new.

@@ -16613,7 +16613,7 @@ var TOOLS = [
   },
   {
     name: "collab_status",
-    description: "Zeigt die kwcollab-Kan\xE4le DIESER Session: Teilnehmer, woran gemeinsam gearbeitet wird (Gegenst\xE4nde und ihre Abschnitts-Reservierungen), ob der Kanal pausiert ist, und die offenen Einladungen an diesen Nutzer. Ohne Angabe von collab_id werden alle Kan\xE4le gezeigt; ein Kanal entsteht, wenn jemand eine Einladung annimmt -- nicht von hier aus.",
+    description: "Zeigt die kwcollab-Kan\xE4le DIESER Session: Teilnehmer, woran gemeinsam gearbeitet wird (die Dokumente und ihre Abschnitts-Reservierungen), ob der Kanal pausiert ist, und die offenen Einladungen an diesen Nutzer. Ohne Angabe von collab_id werden alle Kan\xE4le gezeigt; ein Kanal entsteht, wenn jemand eine Einladung annimmt -- nicht von hier aus.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false }
   },
   {
@@ -16639,7 +16639,7 @@ var TOOLS = [
   },
   {
     name: "collab_leases",
-    description: "Zeigt die aktiven Abschnitts-Reservierungen im kwcollab-Kanal: welcher Abschnitt eines gemeinsam bearbeiteten Dokuments gerade von wem gehalten wird und bis wann. Vor dem Schreiben in einen gemeinsamen Gegenstand pr\xFCfen, damit zwei Claudes nicht denselben Abschnitt \xFCberschreiben.",
+    description: "Zeigt die aktiven Abschnitts-Reservierungen im kwcollab-Kanal: welcher Abschnitt eines gemeinsam bearbeiteten Dokuments gerade von wem gehalten wird und bis wann. Vor dem Schreiben in ein gemeinsames Dokument pr\xFCfen, damit zwei Claudes nicht denselben Abschnitt \xFCberschreiben.",
     inputSchema: {
       type: "object",
       properties: {
@@ -16650,23 +16650,23 @@ var TOOLS = [
   },
   {
     name: "collab_lease",
-    description: "Reserviert EINEN Abschnitt eines Gegenstands im kwcollab-Kanal (z. B. '## Preisblatt') f\xFCr eine begrenzte Zeit. Beratend, nicht erzwingend: h\xE4lt jemand anderes den Abschnitt, kommt eine Antwort mit dem Halter statt einer Reservierung -- dann den Abschnitt nur LESEN und Befunde in den Kanal schreiben. Gegen \xDCberschreiben sch\xFCtzt die Versionspr\xFCfung des Zielsystems.\nDen Gegenstand BENENNST DU SELBST (`subject_kind` + `subject_ref`): du wei\xDFt als einziger, an welcher Datei, welchem MR, welchem Wiki- oder DMS-Eintrag du schreibst, und der Kanal legt ihn an, wenn es ihn noch nicht gibt. Frag den Menschen NICHTS dazu -- er hat daf\xFCr keinen Knopf. `subject_id` aus collab_status geht weiter, braucht aber einen Gegenstand, der schon da ist.\nF\xDCR QUELLCODE RESERVIERST DU NICHTS: eine Datei sperrt niemand, Konflikte l\xF6st git. Reservierungen sind f\xFCr Abschnitte von Dokumenten, die von Hand geschrieben werden.",
+    description: "Reserviert EINEN Abschnitt eines Dokuments im kwcollab-Kanal (z. B. '## Preisblatt') f\xFCr eine begrenzte Zeit. Beratend, nicht erzwingend: h\xE4lt jemand anderes den Abschnitt, kommt eine Antwort mit dem Halter statt einer Reservierung -- dann den Abschnitt nur LESEN und Befunde in den Kanal schreiben. Gegen \xDCberschreiben sch\xFCtzt die Versionspr\xFCfung des Zielsystems.\nWELCHES Dokument, leitest du aus deinem eigenen Zusammenhang ab (`subject_kind` + `subject_ref`): die Datei, den MR, den Wiki- oder DMS-Eintrag, an dem du gerade schreibst. Der Kanal legt ihn an, wenn er ihn noch nicht kennt. Das ist Betriebsbuchhaltung und geht den Menschen nichts an -- frag ihn nicht danach und erz\xE4hle ihm nicht davon. `subject_id` geht weiter, braucht aber einen Eintrag, den der Kanal schon kennt.\nF\xDCR QUELLCODE RESERVIERST DU NICHTS: eine Datei sperrt niemand, Konflikte l\xF6st git. Reservierungen sind f\xFCr Abschnitte von Dokumenten, die von Hand geschrieben werden.",
     inputSchema: {
       type: "object",
       properties: {
         subject_kind: {
           type: "string",
           enum: ["workitem_md", "wiki", "dms", "file", "mr"],
-          description: "Art des Gegenstands, den du benennst: workitem_md (Text des Workitems), wiki, dms, file (Datei im Repo), mr"
+          description: "Art des Dokuments, das du benennst: workitem_md (Text des Workitems), wiki, dms, file (Datei im Repo), mr"
         },
         subject_ref: {
           type: "string",
-          description: "Der Gegenstand selbst: bei file der Pfad IM REPO mit Vorw\xE4rtsstrichen (kwterm/node/src/agent.ts), bei mr die MR-URL, bei wiki/dms die ID. NIE ein Pfad deines Rechners -- sonst zeigen zwei Rechner auf zwei Gegenst\xE4nde, die sich nie treffen."
+          description: "Das Dokument selbst: bei file der Pfad IM REPO mit Vorw\xE4rtsstrichen (kwterm/node/src/agent.ts), bei mr die MR-URL, bei wiki/dms die ID. NIE ein Pfad deines Rechners -- sonst zeigen zwei Rechner auf zwei Dinge, die sich nie treffen."
         },
-        subject_title: { type: "string", description: "Optional: wie der Gegenstand im Kanal hei\xDFen soll" },
+        subject_title: { type: "string", description: "Optional: wie das Dokument im Kanal hei\xDFen soll" },
         subject_id: {
           type: "string",
-          description: "UUID eines Gegenstands, der schon im Kanal steht (subject_id aus collab_status) -- nur, wenn du ihn nicht selbst benennst"
+          description: "UUID eines Eintrags, den der Kanal schon kennt (subject_id aus collab_status) -- nur, wenn du ihn nicht selbst benennst"
         },
         section: { type: "string", description: "Der Abschnitt, z. B. '## Preisblatt' oder ein Dateipfad" },
         ttl_sec: { type: "integer", description: "Reservierungsdauer in Sekunden (Standard 1800, max 28800)" },
