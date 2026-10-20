@@ -43,6 +43,7 @@ import { runSseReceiver } from "./sse-receiver.js";
 import { readCursor, rememberCursor } from "./collabCursor.js";
 import { createLineWriter } from "./listen.js";
 import { collabLine, collabClosedLine, senderName } from "./collabLine.js";
+import { takeOwnHumanLine } from "./ownHumanLines.js";
 import * as collab from "./collab.js";
 import { codeServing as defaultCodeServing } from "./codeMonitor.js";
 
@@ -136,6 +137,11 @@ export function frameToLine(raw, { members = [], selfSessionId = null, collabId 
   // The session id alone is NOT enough (s. the file header): the relay stamps a HUMAN message from
   // this pane's channel view with THIS session's id. Only the agent's own contributions go back.
   if (selfSessionId && msg.from_session === selfSessionId && msg.author_kind !== "human") return null;
+  // AND A LINE WE RELAYED AS THE HUMAN IS ONE OF OUR OWN (field report 2026-10-20). It is stamped
+  // `human` on purpose (the pause counter has to see the human speaking), so the line above keeps
+  // it -- and the session read its own sentence back and answered it: "Echo meiner eigenen Zeile,
+  // kein neues Ereignis". The send path named the seq (`ownHumanLines.js`); this is where it pays.
+  if (takeOwnHumanLine(msg.seq)) return null;
   // A code line (WI 11517979) wakes an idle agent only where its human allowed it (mandate `wake`).
   // Without the wake the state is still taken in -- at the end of the agent's next turn, by the Stop
   // hook -- and every line costs tokens on the workitem whether anybody is watching or not.

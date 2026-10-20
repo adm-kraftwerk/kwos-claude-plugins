@@ -158,7 +158,7 @@ export const TOOLS = [
     name: "collab_status",
     description:
       "Zeigt die kwcollab-Kanäle DIESER Session: Teilnehmer, woran gemeinsam gearbeitet wird " +
-      "(Gegenstände und ihre Abschnitts-Reservierungen), ob der Kanal pausiert ist, und die " +
+      "(die Dokumente und ihre Abschnitts-Reservierungen), ob der Kanal pausiert ist, und die " +
       "offenen Einladungen an diesen Nutzer. Ohne Angabe von collab_id werden alle Kanäle " +
       "gezeigt; ein Kanal entsteht, wenn jemand eine Einladung annimmt -- nicht von hier aus.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -199,7 +199,7 @@ export const TOOLS = [
     description:
       "Zeigt die aktiven Abschnitts-Reservierungen im kwcollab-Kanal: welcher Abschnitt eines " +
       "gemeinsam bearbeiteten Dokuments gerade von wem gehalten wird und bis wann. Vor dem " +
-      "Schreiben in einen gemeinsamen Gegenstand prüfen, damit zwei Claudes nicht denselben " +
+      "Schreiben in ein gemeinsames Dokument prüfen, damit zwei Claudes nicht denselben " +
       "Abschnitt überschreiben.",
     inputSchema: {
       type: "object",
@@ -212,21 +212,44 @@ export const TOOLS = [
   {
     name: "collab_lease",
     description:
-      "Reserviert EINEN Abschnitt eines Gegenstands im kwcollab-Kanal (z. B. '## Preisblatt') für " +
+      "Reserviert EINEN Abschnitt eines Dokuments im kwcollab-Kanal (z. B. '## Preisblatt') für " +
       "eine begrenzte Zeit. Beratend, nicht erzwingend: hält jemand anderes den Abschnitt, kommt " +
       "eine Antwort mit dem Halter statt einer Reservierung -- dann den Abschnitt nur LESEN und " +
       "Befunde in den Kanal schreiben. Gegen Überschreiben schützt die Versionsprüfung des " +
-      "Zielsystems.",
+      "Zielsystems.\n" +
+      "WELCHES Dokument, leitest du aus deinem eigenen Zusammenhang ab (`subject_kind` + " +
+      "`subject_ref`): die Datei, den MR, den Wiki- oder DMS-Eintrag, an dem du gerade schreibst. " +
+      "Der Kanal legt ihn an, wenn er ihn noch nicht kennt. Das ist Betriebsbuchhaltung und geht " +
+      "den Menschen nichts an -- frag ihn nicht danach und erzähle ihm nicht davon. `subject_id` " +
+      "geht weiter, braucht aber einen Eintrag, den der Kanal schon kennt.\n" +
+      "FÜR QUELLCODE RESERVIERST DU NICHTS: eine Datei sperrt niemand, Konflikte löst git. " +
+      "Reservierungen sind für Abschnitte von Dokumenten, die von Hand geschrieben werden.",
     inputSchema: {
       type: "object",
       properties: {
-        subject_id: { type: "string", description: "UUID des Gegenstands (subject_id aus collab_status)" },
+        subject_kind: {
+          type: "string",
+          enum: ["workitem_md", "wiki", "dms", "file", "mr"],
+          description: "Art des Dokuments, das du benennst: workitem_md (Text des Workitems), wiki, dms, file (Datei im Repo), mr",
+        },
+        subject_ref: {
+          type: "string",
+          description:
+            "Das Dokument selbst: bei file der Pfad IM REPO mit Vorwärtsstrichen " +
+            "(kwterm/node/src/agent.ts), bei mr die MR-URL, bei wiki/dms die ID. NIE ein Pfad " +
+            "deines Rechners -- sonst zeigen zwei Rechner auf zwei Dinge, die sich nie treffen.",
+        },
+        subject_title: { type: "string", description: "Optional: wie das Dokument im Kanal heißen soll" },
+        subject_id: {
+          type: "string",
+          description: "UUID eines Eintrags, den der Kanal schon kennt (subject_id aus collab_status) -- nur, wenn du ihn nicht selbst benennst",
+        },
         section: { type: "string", description: "Der Abschnitt, z. B. '## Preisblatt' oder ein Dateipfad" },
         ttl_sec: { type: "integer", description: "Reservierungsdauer in Sekunden (Standard 1800, max 28800)" },
         reason: { type: "string", description: "Optional: was du dort tust" },
         collab_id: { type: "string", description: "Nur nötig, wenn diese Session in mehreren Kanälen ist" },
       },
-      required: ["subject_id", "section"],
+      required: ["section"],
       additionalProperties: false,
     },
   },
@@ -462,8 +485,16 @@ export async function handleToolCall(name, args = {}) {
     }
     case "collab_lease": {
       const c = await collab.resolveCollab(args.collab_id);
+      // The document is named by the caller (kind + ref) or taken from the channel (id). A KIND
+      // without a REF is not a name -- `acquireLease` sends only what is complete, and the relay
+      // answers 400 for "you named nothing", which is the right sentence for it.
+      const named =
+        args.subject_kind && args.subject_ref
+          ? { kind: args.subject_kind, ref: args.subject_ref, ...(args.subject_title ? { title: args.subject_title } : {}) }
+          : undefined;
       const { lease } = await collab.acquireLease(c.collab_id, {
         subjectId: args.subject_id,
+        subject: named,
         section: args.section,
         ttlSec: args.ttl_sec,
         reason: args.reason,
