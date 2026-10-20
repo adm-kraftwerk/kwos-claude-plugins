@@ -26,6 +26,11 @@ process.env.KWOS_COLLAB_CANARY = "1";
 // must not read the developer's real notes -- and the previous test must not leave a cursor that
 // swallows the next one's frame.
 process.env.KWOS_COLLAB_CURSORS = join(tmpdir(), `kwcollab-cursors-${process.pid}.json`);
+// The poll interval of the round tests below, not the fleet's 15 s: a round that throws is only
+// visible in the NEXT round, and waiting 15 s for it would make the suite a clock test. 250 is the
+// floor readCheckInterval accepts (anything below it falls back to the default); read at module load
+// (collab-listen.js), hence before the import.
+process.env.KWOS_COLLAB_POLL_MS = "250";
 // ... and a fresh file per test: the reader's second belt drops a seq it already printed, and the
 // previous test's frame would otherwise swallow the next one's.
 test.beforeEach(() => {
@@ -83,8 +88,8 @@ const sseResponse = (frame, signal) =>
 
 // Der Kanal dieser Session, wie `GET /v1/collabs` ihn liefert -- die Mitgliedszeile nennt die
 // SESSION, nicht den Login.
-const collabRow = () => ({
-  collab_id: COLLAB,
+const collabRow = (id = COLLAB) => ({
+  collab_id: id,
   workitem: "11504306",
   title: "Neu angelegt",
   my_status: "joined",
@@ -220,6 +225,112 @@ test("stdin MIT Kanal: sein EOF beendet den Empfang weiterhin", async () => {
     stdin.emit("end");
     await handle.ended;
   } finally {
+    mock.restore();
+  }
+});
+
+/**
+ * The lines this plugin writes to stderr (server/log.js) while `run` does its work, plus the way
+ * back. A round that throws must be NAMED, and the name is the whole point of the change -- so the
+ * test reads the log instead of trusting that a failure "would have been visible".
+ */
+function captureStderr() {
+  const real = process.stderr.write;
+  const seen = [];
+  process.stderr.write = (chunk, ...rest) => {
+    seen.push(String(chunk));
+    return real.call(process.stderr, chunk, ...rest);
+  };
+  return { seen, restore: () => { process.stderr.write = real; } };
+}
+
+// Serving this worktree's snapshots is a SIDE JOB of the round. As a bare await, a throw there ended
+// the whole round: the channels behind it never got a stream, and in the first round the receive path
+// never came up at all -- the session sat in a channel that delivered nothing, with no line anywhere
+// (WI 11523603).
+test("a throwing code serving costs its channel, not the round", async () => {
+  const bad = "11111111-1111-4111-8111-111111111111";
+  const mock = installFetchMock((url, init) =>
+    url.includes("/events")
+      ? sseResponse(FRAME, init?.signal)
+      : jsonResponse({ collabs: [collabRow(bad), collabRow(COLLAB)] }));
+  const lines = [];
+  const refreshed = [];
+  const log = captureStderr();
+  const handle = await startCollabListener({
+    writeLine: (l) => lines.push(l),
+    stdin: stdinDouble(),
+    isChannel: () => false,
+    codeServing: () => ({
+      refresh: async (id) => { refreshed.push(id); if (id === bad) throw new Error("bereitstellen kaputt"); },
+      drop: () => {},
+    }),
+  });
+  try {
+    assert.ok(await until(() => lines.length > 0), `der zweite Kanal bekam keinen Strom (${refreshed.join(", ")})`);
+    assert.deepEqual(refreshed.slice(0, 2), [bad, COLLAB], "beide Kanaele wurden in dieser Runde angefasst");
+    assert.ok(lines.every((l) => l === EXPECTED_LINE));
+    assert.ok(
+      log.seen.some((l) => /Code-Austausch nicht aktualisiert/.test(l)),
+      `der Fehler blieb stumm: ${log.seen.join("")}`,
+    );
+  } finally {
+    handle.stop();
+    await handle.ended;
+    log.restore();
+    mock.restore();
+  }
+});
+
+// A round that throws where the round's own catches end used to be swallowed by the interval
+// (`poll().catch(() => {})`), and a rejected FIRST round ended the receive path outright: `running`
+// rejected, its teardown cleared the watch timer and every stream, and the interval that would have
+// retried was never even installed (WI 11523603). One bad round must cost one round.
+test("a rejected poll round is named and does not take the receive path down", async () => {
+  const frame = (seq) =>
+    `id: ${seq}\nevent: message\ndata: ${JSON.stringify({
+      seq, collab_id: COLLAB, from_subject: "u-mara", author_kind: "human", text: "ping pong",
+    })}\n\n`;
+  let listed = [collabRow()];
+  let seq = 7;
+  const mock = installFetchMock((url, init) =>
+    url.includes("/events") ? sseResponse(frame(seq), init?.signal) : jsonResponse({ collabs: listed }));
+  const lines = [];
+  let drops = 0;
+  const log = captureStderr();
+  const handle = await startCollabListener({
+    writeLine: (l) => lines.push(l),
+    stdin: stdinDouble(),
+    isChannel: () => false,
+    // The step of the round that throws outside those catches: the channel disappears from the
+    // relay's list, and the monitor's own `drop` fails on the way out. It fails ONCE -- the round it
+    // belongs to. A `drop` that threw again would be this test's own double at work in the teardown
+    // (`closeAll` calls it unwrapped as well), and the test would measure itself.
+    codeServing: () => ({ refresh: async () => {}, drop: () => { if (++drops === 1) throw new Error("Runde kaputt"); } }),
+  });
+  const polls = () => mock.calls.filter((c) => !c.url.includes("/events")).length;
+  try {
+    assert.ok(await until(() => lines.length === 1), "die erste Runde muss den Kanal oeffnen");
+
+    listed = [];   // the channel is gone -- the next round drops it, and that step throws
+    assert.ok(await until(() => drops === 1), "die Runde mit dem Wurf muss ueberhaupt laufen");
+    const before = polls();
+    assert.ok(
+      log.seen.some((l) => /Kollab-Runde abgebrochen/.test(l)),
+      `die geworfene Runde blieb stumm: ${log.seen.join("")}`,
+    );
+
+    // The receive path is still up: the interval keeps polling ...
+    assert.ok(await until(() => polls() > before + 1), "der Takt laeuft nach der geworfenen Runde nicht mehr");
+    // ... and the channel that comes back delivers lines again.
+    seq = 8;
+    listed = [collabRow()];
+    assert.ok(await until(() => lines.length === 2), `kein Empfang nach der geworfenen Runde (${lines.length} Zeilen)`);
+    assert.equal(lines[1], EXPECTED_LINE);
+  } finally {
+    handle.stop();
+    await handle.ended;
+    log.restore();
     mock.restore();
   }
 });

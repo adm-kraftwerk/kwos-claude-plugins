@@ -277,6 +277,18 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
       log.error("Collab-Liste nicht abrufbar.", { error: String(err) });
       return;
     }
+    // Serving this worktree's snapshots is a SIDE JOB of the round, and the round must not pay for
+    // its failure with the channels that come after it: as a bare await, a throw here ended the whole
+    // round -- the channels behind it never got a stream, and in the FIRST round the receive path
+    // never came up at all (WI 11523603). One line names it; the other channels of this round go on.
+    async function refreshCode(collabId, entry) {
+      try {
+        await code?.refresh(collabId, entry);
+      } catch (err) {
+        log.error("Code-Austausch nicht aktualisiert.", { collabId, error: String(err) });
+      }
+    }
+
     const wanted = new Set(joined.map((c) => c.collab_id));
     lastJoined = wanted;
     for (const [id, entry] of [...open]) {
@@ -290,7 +302,7 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
         // name, and it grows while the channel is open (review finding 2026-10-16 -- the list used
         // to be frozen at the moment the stream was opened, so later joiners stayed logins).
         existing.members = members;
-        await code?.refresh(c.collab_id, existing);
+        await refreshCode(c.collab_id, existing);
         continue;
       }
       const controller = new AbortController();
@@ -300,7 +312,7 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
       const entry = { controller, members, lastSeq: readCursor(c.collab_id) ?? 0 };
       entry.printedSeq = entry.lastSeq;
       open.set(c.collab_id, entry);
-      await code?.refresh(c.collab_id, entry);
+      await refreshCode(c.collab_id, entry);
       log.info("Collab-Kanal verbunden.", { collabId: c.collab_id, workitem: c.workitem });
       runSseReceiver(
         (raw) => {
@@ -349,6 +361,12 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
   // after the session is gone. The orphan then keeps polling the relay every 15 s for a session
   // nobody is in any more. Measured on the sibling timer: 47 ms to exit with it unref'd, still
   // alive 10 s later without.
+  // One line for a round that threw where the round's own catches end (WI 11523603): the interval
+  // used to carry `poll().catch(() => {})`, so a failure there was not visible anywhere -- the
+  // channel simply stayed empty. The round is not re-started from here: the interval is the retry,
+  // and `poll()` clears its own `inflight` in `finally`, so the next tick starts a fresh round.
+  const roundFailed = (err) => log.error("Kollab-Runde abgebrochen -- die naechste Runde versucht es erneut.", { error: String(err) });
+
   let boundId = config.sessionId;
   const watch = setInterval(async () => {
     if (stopping) return;
@@ -382,7 +400,7 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
         log.error("Kanal nach dem Session-Wechsel nicht neu angenommen.", { collabId: id, error: String(err) });
       }
     }
-    await poll();
+    await poll().catch(roundFailed);
   }, config.sessionIdCheckMs);
   watch.unref();
 
@@ -392,8 +410,11 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
   // first poll is back". `pollTimer` is assigned inside, hence the guard in the teardown: a stop
   // that arrives before the first poll returned must not leave the interval running.
   const running = (async () => {
-    await poll();
-    pollTimer = setInterval(() => { poll().catch(() => {}); }, COLLAB_POLL_MS);
+    // A rejected FIRST round used to end the receive path before it began: `await poll()` rejected
+    // `running`, whose teardown clears the interval and every stream -- and the interval that would
+    // have retried was never even installed. One bad round is one round (WI 11523603).
+    await poll().catch(roundFailed);
+    pollTimer = setInterval(() => { poll().catch(roundFailed); }, COLLAB_POLL_MS);
     // `unref` bleibt (Review-Fund Kai, s. den Test): der Takt soll den Prozess NICHT ueber die
     // Sitzung hinaus am Leben halten. Was ihn haelt, ist das abonnierte stdin oben -- ein Punkt,
     // den die Sitzung selbst beendet.

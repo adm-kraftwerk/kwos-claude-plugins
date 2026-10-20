@@ -16821,6 +16821,7 @@ async function startServing({ relayUrl, getToken, collabId, top, signal, runSse,
 
 // server/codeMonitor.js
 function localState(cwd2) {
+  if (!cwd2) return null;
   const r = spawnSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: cwd2, encoding: "utf8", windowsHide: true });
   if (r.status !== 0) return null;
   const file = join5(r.stdout.trim(), "kwcollab", "state.json");
@@ -16973,6 +16974,13 @@ async function startCollabListener({ writeLine, env = process.env, stdin = proce
       log.error("Collab-Liste nicht abrufbar.", { error: String(err) });
       return;
     }
+    async function refreshCode(collabId, entry) {
+      try {
+        await code?.refresh(collabId, entry);
+      } catch (err) {
+        log.error("Code-Austausch nicht aktualisiert.", { collabId, error: String(err) });
+      }
+    }
     const wanted = new Set(joined.map((c) => c.collab_id));
     lastJoined = wanted;
     for (const [id, entry] of [...open]) {
@@ -16987,14 +16995,14 @@ async function startCollabListener({ writeLine, env = process.env, stdin = proce
       const existing = open.get(c.collab_id);
       if (existing) {
         existing.members = members;
-        await code?.refresh(c.collab_id, existing);
+        await refreshCode(c.collab_id, existing);
         continue;
       }
       const controller = new AbortController();
       const entry = { controller, members, lastSeq: readCursor(c.collab_id) ?? 0 };
       entry.printedSeq = entry.lastSeq;
       open.set(c.collab_id, entry);
-      await code?.refresh(c.collab_id, entry);
+      await refreshCode(c.collab_id, entry);
       log.info("Collab-Kanal verbunden.", { collabId: c.collab_id, workitem: c.workitem });
       runSseReceiver(
         (raw) => {
@@ -17030,6 +17038,7 @@ async function startCollabListener({ writeLine, env = process.env, stdin = proce
       });
     }
   }
+  const roundFailed = (err) => log.error("Kollab-Runde abgebrochen -- die naechste Runde versucht es erneut.", { error: String(err) });
   let boundId = config2.sessionId;
   const watch = setInterval(async () => {
     if (stopping) return;
@@ -17049,15 +17058,14 @@ async function startCollabListener({ writeLine, env = process.env, stdin = proce
         log.error("Kanal nach dem Session-Wechsel nicht neu angenommen.", { collabId: id, error: String(err) });
       }
     }
-    await poll();
+    await poll().catch(roundFailed);
   }, config2.sessionIdCheckMs);
   watch.unref();
   let pollTimer = null;
   const running = (async () => {
-    await poll();
+    await poll().catch(roundFailed);
     pollTimer = setInterval(() => {
-      poll().catch(() => {
-      });
+      poll().catch(roundFailed);
     }, COLLAB_POLL_MS);
     pollTimer.unref();
     await ended;

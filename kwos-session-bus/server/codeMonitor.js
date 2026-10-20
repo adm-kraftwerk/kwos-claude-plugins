@@ -15,6 +15,13 @@ import { runSseReceiver } from "./sse-receiver.js";
 import { startServing, relayAdapter } from "./codeServe.js";
 
 function localState(cwd) {
+  // NO WORKTREE, NOTHING TO INSPECT (WI 11523603). `cwd` is null where the process could not report
+  // its working directory (config.js, handed on by the listener). spawnSync with a null cwd runs in
+  // the process's own directory -- which is the REPAIR directory config.js chdirs to for exactly
+  // that case ($HOME, $TMPDIR, /) -- so the test below would read whatever kwcollab/state.json
+  // happens to sit there and could start serving ANOTHER repository's snapshots. null means "no
+  // worktree": one return, no process, no state.
+  if (!cwd) return null;
   const r = spawnSync("git", ["rev-parse", "--absolute-git-dir"], { cwd, encoding: "utf8", windowsHide: true });
   if (r.status !== 0) return null;
   const file = join(r.stdout.trim(), "kwcollab", "state.json");
