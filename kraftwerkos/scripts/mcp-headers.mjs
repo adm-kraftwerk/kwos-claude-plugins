@@ -30,6 +30,23 @@
  * Anmeldedialog aufreissen — `XIAM_REFRESH_ONLY=1` erzwingt das, genau wie beim Session-Bus. Wer
  * angemeldet ist, hat einen Refresh-Token-Cache; wer es nicht ist, bekommt eine Zeile auf stderr
  * statt eines Fensters mitten in der Arbeit.
+ *
+ * X-PLAT, und warum genau SO:
+ *
+ *   * Claude Code ruft einen `headersHelper` als KOMMANDOZEILE auf (`sh -c <headersHelper>` auf
+ *     POSIX, die Entsprechung auf Windows) — deshalb steht in `.mcp.json` `node "<pfad>"` und nicht
+ *     ein nackter Skriptpfad: so braucht nichts ein Exec-Bit (das eine Windows-Arbeitskopie oder ein
+ *     Tarball ohnehin nicht zuverlaessig traegt), und der Pfad ist QUOTIERT, weil ein
+ *     Benutzerverzeichnis ein Leerzeichen enthalten darf.
+ *   * EIN Einstiegspunkt fuer alle drei Plattformen: `.mcp.json` ist statisches JSON, es kann nicht
+ *     je Plattform ein anderes Kommando nennen. Node ist in dieser Umgebung ohnehin Voraussetzung
+ *     (das Schwester-Plugin `kwos-session-bus` IST ein Node-MCP-Server, und das Launcher-Gate der
+ *     Flotte verlangt Node).
+ *   * Der Token-Helfer wird JE PLATTFORM gerufen: `powershell -File …ps1` auf Windows, `bash …sh`
+ *     sonst — derselbe Aufruf wie in `kwos-session-bus/server/auth.js`. `bash` und nicht `sh`:
+ *     `xiam-token.sh` traegt `#!/usr/bin/env bash`, und auf Debian/Ubuntu ist `sh` ein `dash`.
+ *   * Beide Aufrufe uebergeben den Pfad als EIGENES Argument (kein Shell-String), damit Leerzeichen
+ *     im Pfad nirgends zu einer zweiten Zerlegung fuehren.
  */
 
 import { spawnSync } from "node:child_process";

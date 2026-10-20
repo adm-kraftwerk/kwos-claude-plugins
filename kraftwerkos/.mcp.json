@@ -3,7 +3,7 @@
     "kraftwerk-os": {
       "type": "http",
       "url": "https://os.kraftwerk.io/mcp",
-      "headersHelper": "node ${CLAUDE_PLUGIN_ROOT}/scripts/mcp-headers.mjs"
+      "headersHelper": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/mcp-headers.mjs\""
     },
     "bc365": {
       "type": "http",
