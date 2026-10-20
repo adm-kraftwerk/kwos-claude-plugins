@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -120,4 +120,52 @@ test("without its own marker nothing changes -- no session is lost to a missing 
   assert.equal(r.after, "session-FROM-ENV", "the env value is still the fallback when no hook wrote a marker");
   assert.equal(r.changed, false);
   assert.equal(r.path, null);
+});
+
+// The Stop/SubagentStop hook imports collab-listen -> config BEFORE it reads its payload. A cwd
+// the platform refuses to report (a deleted worktree, or one whose access was withdrawn; macOS
+// says EPERM rather than ENOENT) used to throw in process.cwd() at module load, so the plugin died
+// before the first line of the hook ran and every turn end produced a red hook error (WI 11523603).
+// The module must survive it: a generic display name, the session id from the environment, and no
+// marker polling for a directory that cannot be resolved.
+test("an unreadable working directory costs a generic name, not the process", () => {
+  const root = scratch();
+  const child = join(root, "worktree");
+  mkdirSync(child, { recursive: true });
+  const home = scratch();
+  const probe = join(home, "probe.mjs");
+  writeFileSync(probe, `
+    const { config, ensureSessionId, sessionCwd } = await import(${JSON.stringify(CONFIG_URL)});
+    const id = await ensureSessionId();
+    console.log(JSON.stringify({ cwd: sessionCwd, name: config.displayName, channels: config.channels, id }));
+  `, "utf8");
+
+  // Start the shell INSIDE the directory while it is still reachable, then take the directory's
+  // search permission away: shell and node inherit the cwd, but uv_cwd can no longer resolve it.
+  // Deleting the directory does NOT reproduce this -- Node caches the value once it could be read.
+  const started = Date.now();
+  let out;
+  try {
+    out = execFileSync("/bin/sh", ["-c", `chmod 000 "${root}" && "${process.execPath}" "${probe}"; status=$?; chmod 755 "${root}"; exit $status`], {
+      cwd: child,
+      // HOME points at a scratch dir: os.homedir() would otherwise read a real session-name file.
+      env: {
+        ...process.env,
+        HOME: home,
+        KWOS_CLIENT_ID: CLIENT_ID,
+        KWOS_CHANNELS: "",
+        CLAUDE_CODE_SESSION_ID: "session-FROM-ENV",
+      },
+      encoding: "utf8",
+    });
+  } finally {
+    try { chmodSync(root, 0o755); } catch { /* the shell restored it already */ }
+  }
+  const r = JSON.parse(out.trim().split("\n").pop());
+
+  assert.equal(r.cwd, null, "no directory to read or search");
+  assert.equal(r.name, "Claude Code Session", "the relay still gets a display name");
+  assert.deepEqual(r.channels, ["Claude Code Session"]);
+  assert.equal(r.id, "session-FROM-ENV", "the env value answers when there is no marker to read");
+  assert.ok(Date.now() - started < 1900, "the marker polls are skipped, not slept through");
 });

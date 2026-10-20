@@ -15520,6 +15520,22 @@ var DEFAULT_TOKEN_HELPER_PATH = join(
 );
 var TOKEN_HELPER_PATH = process.env.KWOS_XID_TOKEN_HELPER_PATH || DEFAULT_TOKEN_HELPER_PATH;
 var TOKEN_OVERRIDE = process.env.KWOS_XID_ACCESS_TOKEN;
+function readProcessCwd() {
+  try {
+    return process.cwd();
+  } catch {
+    for (const dir of [homedir(), process.env.TMPDIR, "/"]) {
+      if (!dir) continue;
+      try {
+        process.chdir(dir);
+        break;
+      } catch {
+      }
+    }
+    return null;
+  }
+}
+var sessionCwd = readProcessCwd();
 function findMarker(startDir, relativeFile) {
   let dir = startDir;
   for (; ; ) {
@@ -15537,7 +15553,7 @@ function findMarker(startDir, relativeFile) {
   }
 }
 var OWN_MARKER_NAME = clientMarkerName(process.env.KWOS_CLIENT_ID);
-var ownMarker = () => OWN_MARKER_NAME ? findMarker(process.cwd(), join(MARKER_DIR, OWN_MARKER_NAME)) : null;
+var ownMarker = () => OWN_MARKER_NAME && sessionCwd ? findMarker(sessionCwd, join(MARKER_DIR, OWN_MARKER_NAME)) : null;
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function deriveDisplayName(cwd2) {
   if (typeof cwd2 !== "string" || !cwd2.trim()) return "Claude Code Session";
@@ -15559,17 +15575,21 @@ function deriveChannels(cwd2) {
   return [.../* @__PURE__ */ new Set([deriveDisplayName(cwd2), ...extra])];
 }
 async function resolveSessionId() {
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const own = ownMarker();
-    if (own) return own.id;
-    await sleep(500);
+  if (sessionCwd) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const own = ownMarker();
+      if (own) return own.id;
+      await sleep(500);
+    }
   }
   const fromEnv = process.env.CLAUDE_CODE_SESSION_ID;
   if (fromEnv) return fromEnv;
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const legacy = findMarker(process.cwd(), LEGACY_MARKER_FILE);
-    if (legacy) return legacy.id;
-    await sleep(500);
+  if (sessionCwd) {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const legacy = findMarker(sessionCwd, LEGACY_MARKER_FILE);
+      if (legacy) return legacy.id;
+      await sleep(500);
+    }
   }
   const generated = randomUUID();
   log.error(
@@ -15582,8 +15602,8 @@ var config2 = {
   tokenHelperPath: TOKEN_HELPER_PATH,
   tokenOverride: TOKEN_OVERRIDE,
   sessionId: void 0,
-  displayName: process.env.KWOS_SESSION_DISPLAY_NAME || readClaudeSessionName() || deriveDisplayName(process.cwd()),
-  channels: deriveChannels(process.cwd()),
+  displayName: process.env.KWOS_SESSION_DISPLAY_NAME || readClaudeSessionName() || deriveDisplayName(sessionCwd),
+  channels: deriveChannels(sessionCwd),
   heartbeatIntervalMs: 5 * 60 * 1e3,
   // Vorschlag Server-Spec §3.1: alle 5 Min
   // How often a long-running process re-reads its own marker. The file is a few bytes and the check
@@ -16935,7 +16955,7 @@ async function startCollabListener({ writeLine, env = process.env, stdin = proce
     }
     open.clear();
   };
-  const code = codeServing2 ? codeServing2({ cwd: process.cwd() }) : null;
+  const code = codeServing2 ? codeServing2({ cwd: sessionCwd }) : null;
   let lastJoined = /* @__PURE__ */ new Set();
   let inflight = null;
   function poll() {

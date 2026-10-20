@@ -14,11 +14,17 @@
 // systemMessage the human sees (a silent failure would leave two people believing they share a
 // state they do not), never into a blocked turn or a failed tool call. The precheck is fail-open
 // for the same reason, and says so.
+//
+// AND IT DOES NOT NEED THE CALLER'S WORKING DIRECTORY (WI 11523603). hooks.json starts it in
+// $HOME, and where even that cannot be reported, config.js's `sessionCwd` is null and the local
+// test below finds no worktree: one quiet exit, never the red "getcwd: operation not permitted"
+// this hook used to produce on every turn end.
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { collabReleased } from "../server/collab-listen.js";
+import { sessionCwd } from "../server/config.js";
 
 const mode = process.argv[2];
 
@@ -46,7 +52,10 @@ async function main() {
   if (!collabReleased()) return;
   let payload = {};
   try { payload = JSON.parse(raw || "{}"); } catch { return; }
-  const cwd = payload.cwd || process.cwd();
+  // The payload carries the session's directory. Without it, use the one config could still read:
+  // process.cwd() itself throws where the hook was started from a deleted/protected directory,
+  // and that throw would be the red error this hook must never produce (WI 11523603).
+  const cwd = payload.cwd || sessionCwd;
   if (!inCodeMode(cwd)) return;
 
   // Only now: the modules that talk to the relay (they read the session marker, the token helper).
