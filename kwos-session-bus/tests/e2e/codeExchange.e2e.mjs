@@ -353,7 +353,8 @@ try {
   assert.deepEqual(live.report.map((r) => `${r.kind}:${r.via}`), ["integrated:live"]);
   // And the monitor printed kai's integration as a channel line into tim's session (wake = true).
   for (let i = 0; i < 40 && !/code integrated/.test(monitorOut); i++) await new Promise((r) => setTimeout(r, 250));
-  assert.match(monitorOut, /\[kwcollab [0-9a-f]{8} \| Kai \| claude\] code integrated/);
+  // The head carries the message's seq since WI 11536314 ("[kwcollab <short>:<seq> | ...]").
+  assert.match(monitorOut, /\[kwcollab [0-9a-f]{8}:\d+ \| Kai \| claude\] code integrated/);
   ok("tim's monitor process served kai's live fetch and showed kai's integration as a channel line");
   monitor.kill();
 

@@ -21,9 +21,10 @@
 // about it may be announced: this path rides along in the listener those sessions already have,
 // and `collabReleased` decides whether it is started at all.
 //
-// One line per message on stdout, diagnostics on stderr (the convention of this plugin, s.
-// listen.js). The line format lives in collabLine.js -- it is the contract with the prompt
-// fragment that tells Claude these lines are FOREIGN DATA.
+// One OR MORE lines per message on stdout (a message longer than one monitor line arrives as its
+// numbered parts, WI 11536314), diagnostics on stderr (the convention of this plugin, s. listen.js).
+// The line format lives in collabLine.js -- it is the contract with the prompt fragment that tells
+// Claude these lines are FOREIGN DATA.
 //
 // Deliberately NOT fed back: anything this session's AGENT itself sent. The relay replays up to 500
 // backlog frames on reconnect (relay/server.js), and our own messages are in that backlog -- a
@@ -111,9 +112,11 @@ export function stdinIsChannel(fd = 0) {
 }
 
 /**
- * One SSE frame -> the line to print, or null when it must NOT be printed.
+ * One SSE frame -> the LINES to print (in order), or null when nothing must be printed.
  *
- * Null for our own messages (see the file header) and for anything unreadable: a monitor that
+ * An array and no longer a single string (WI 11536314): a message longer than one monitor line is
+ * split into numbered parts, and the caller prints every part as its own line. Null -- not an empty
+ * array -- for our own messages (see the file header) and for anything unreadable: a monitor that
  * prints a guess would put invented words into the session.
  */
 /** The seq of one frame, 0 when it carries none (the lifecycle event does not). */
@@ -130,8 +133,9 @@ export function frameToLine(raw, { members = [], selfSessionId = null, collabId 
   let msg;
   try { msg = JSON.parse(raw); } catch { return null; }
   if (!msg || typeof msg !== "object") return null;
-  // The channel's own lifecycle event (relay: `event: closed`, data { collab_id }).
-  if (!msg.seq) return msg.collab_id ? collabClosedLine(msg.collab_id) : null;
+  // The channel's own lifecycle event (relay: `event: closed`, data { collab_id }). Not a stored
+  // message: no seq in its head, and one line (nothing to fetch).
+  if (!msg.seq) return msg.collab_id ? [collabClosedLine(msg.collab_id)] : null;
   // Already printed: a frame that arrives twice must not become two lines in the session.
   if (Number(msg.seq) <= Number(after)) return null;
   // The session id alone is NOT enough (s. the file header): the relay stamps a HUMAN message from
@@ -148,9 +152,11 @@ export function frameToLine(raw, { members = [], selfSessionId = null, collabId 
   // A QUESTION to the humans (`escalate`) is always shown: it is what needs an answer.
   if (msg.kind === "code" && !wakeOnCode && msg.payload?.type !== "escalate") return null;
   // A message without text is a valid case (a screenshot speaks for itself) -- collabLine names
-  // the attachment then.
+  // the attachment then. `seq` goes into the head: it is how the reader names this line later
+  // (`collab_get_message`), including a part it never saw.
   return collabLine({
     collabId: msg.collab_id || collabId,
+    seq: msg.seq,
     from: senderName(msg, members),
     kind: msg.author_kind,
     text: msg.text,
@@ -304,16 +310,19 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
       log.info("Collab-Kanal verbunden.", { collabId: c.collab_id, workitem: c.workitem });
       runSseReceiver(
         (raw) => {
-          const line = frameToLine(raw, {
+          const lines = frameToLine(raw, {
             members: entry.members, selfSessionId: config.sessionId, collabId: c.collab_id,
             // Already printed in THIS process: a reconnect must not repeat a line (the receiver
             // resumes by `Last-Event-ID`, this is the second belt for a frame that arrives twice).
             after: entry.printedSeq,
             wakeOnCode: entry.wake !== false,
           });
-          if (!line) return;
+          if (!lines) return;
+          // ONE frame, but possibly SEVERAL lines: a message longer than one monitor line arrives as
+          // its numbered parts (WI 11536314). The cursor advances ONCE for the frame, not once per
+          // part -- the parts are one message, and a reconnect must not replay them.
           entry.printedSeq = Math.max(entry.printedSeq, seqOf(raw));
-          writeLine(line);
+          for (const line of lines) writeLine(line);
         },
         {
           signal: controller.signal,

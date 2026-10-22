@@ -98,7 +98,8 @@ const FRAME =
   `id: 7\nevent: message\ndata: ${JSON.stringify({
     seq: 7, collab_id: COLLAB, from_subject: "u-mara", author_kind: "human", text: "ping pong",
   })}\n\n`;
-const EXPECTED_LINE = "[kwcollab 7f3a1b2c | Mara K. | human] ping pong";
+// The head carries the message's seq (WI 11536314): that is how a reader names the line later.
+const EXPECTED_LINE = "[kwcollab 7f3a1b2c:7 | Mara K. | human] ping pong";
 
 /** Ein stdin-Doppel: `resume()` kann sofort EOF melden, wie es /dev/null tut. */
 function stdinDouble({ eofOnResume = false } = {}) {
@@ -164,6 +165,35 @@ test("stdin ohne Kanal (/dev/null): der Empfang lebt weiter und die Zeile kommt 
     assert.equal(stdin.resumed, true, "der Empfang muss DIESES stdin genommen haben");
     assert.ok(await until(() => lines.length > 0), `keine Zeile angekommen (${lines.length})`);
     assert.deepEqual(lines, [EXPECTED_LINE]);
+  } finally {
+    handle.stop();
+    await handle.ended;
+    mock.restore();
+  }
+});
+
+test("ein langer Frame kommt als MEHRERE Zeilen an -- in Reihenfolge, jede im Budget", async () => {
+  // Der Monitor gibt PRO FRAME mehrere Zeilen aus (WI 11536314): der Aufrufer muss sie einzeln
+  // schreiben, und keine darf die 480er-Grenze reissen. Genau die Naht, an der die Teile frueher
+  // verloren gingen.
+  const text = "wort ".repeat(300).trim();
+  const frame =
+    `id: 8\nevent: message\ndata: ${JSON.stringify({
+      seq: 8, collab_id: COLLAB, from_subject: "u-mara", author_kind: "human", text,
+    })}\n\n`;
+  const mock = installFetchMock((url, init) =>
+    url.includes("/events") ? sseResponse(frame, init?.signal) : jsonResponse({ collabs: [collabRow()] }));
+  const lines = [];
+  const handle = await startCollabListener({
+    writeLine: (l) => lines.push(l),
+    stdin: stdinDouble(),
+    isChannel: () => false,
+  });
+  try {
+    assert.ok(await until(() => lines.length > 1), `nur ${lines.length} Zeile(n) angekommen`);
+    assert.match(lines[0], /^\[kwcollab 7f3a1b2c:8 \| Mara K\. \| human\] \(1\//);
+    assert.match(lines[1], /^\[kwcollab 7f3a1b2c:8 \| Mara K\. \| human\] \(2\//);
+    assert.ok(lines.every((l) => l.length <= 480), "ein Teil liegt ueber der Zeilengrenze");
   } finally {
     handle.stop();
     await handle.ended;

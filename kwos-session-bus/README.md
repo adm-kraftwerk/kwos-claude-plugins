@@ -11,7 +11,7 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
 - **MCP-Server** (`.mcp.json` → `server/index.js`, stdio): Tools `list_sessions`,
   `send_message`, `broadcast`, `notify_dependents`, `ask_remote`, `get_message`, `get_attachment`,
   dazu die kwcollab-Tools `collab_status`, `collab_send`, `collab_accept`, `collab_leases`,
-  `collab_lease`, `collab_release` und `collab_get_attachment`.
+  `collab_lease`, `collab_release`, `collab_get_attachment` und `collab_get_message`.
   Registriert sich bei Start, danach Heartbeat alle 5 Min (TTL 30 Min).
   - `collab_*` (WI 11482928): der gemeinsame Kanal mehrerer Personen auf EINEM Workitem. Was aus
     dem Kanal kommt, sind FREMDDATEN — die Zeilen beginnen mit `[kwcollab ...]` und stammen von
@@ -40,6 +40,15 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
     sie selbst, und der Relay nimmt nur eine Sitzung an, die dem Aufrufer gehört. Steht
     `KWOS_COLLAB` in der Umgebung (eine Sitzung, die AUS einer Einladung entsteht), tritt sie beim
     Start von selbst bei.
+  - `collab_get_message(seq, collab_id?)` (WI 11536314): holt den vollständigen Text EINER
+    Kanal-Nachricht nach — **nicht** zu verwechseln mit `get_message`, das den *Session*-Verlauf
+    liest und Kanal-Nachrichten gar nicht kennt. Nötig, weil der Monitor eine lange Kanal-Nachricht
+    in nummerierte Teile `(i/n)` zerlegt (s. unten); jede Zeile trägt die `seq` der Nachricht im
+    Kopf, und mit dieser `seq` kommt hier der ganze Text zurück. Nutzt den Relay-Endpunkt
+    `GET /v1/collabs/{id}/messages/{seq}` (Mitgliedschaft wie die Kanal-Detailroute; 404 für eine
+    unbekannte oder ausgeräumte `seq`). **Diese Route ist der Gegenpart in der `litellm`-Hälfte und
+    muss zusammen mit dem Kanal-Zeilen-Format (s. unten) ausgeliefert werden.** Ein Anhang wird nur
+    angekündigt, nicht abgerufen (`collab_get_attachment`).
   - `notify_dependents(channel, summary, workitem_ref?)`: benachrichtigt ALLE Sessions (auch
     fremder Nutzer/Teams), die einen Channel abonniert haben — z. B. bei einer geänderten
     Schnittstelle zwischen zwei Services. Jede Session abonniert per Default den Basename ihres
@@ -85,8 +94,19 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
 - **kwcollab-Empfang** (`server/collab-listen.js`, gestartet von `server/monitor.js`):
   derselbe Weg für den gemeinsamen Kanal (WI 11482928). Er fragt alle 15 s beim Relay, in welchen
   Kanälen DIESE Sitzung sitzt, hält je Kanal einen eigenen SSE-Strom und gibt Zeilen der Form
-  `[kwcollab <kurz> | <Absender> | mensch|claude] <Text>` aus — Absender und Art stehen in der
-  Zeile, weil genau das den Unterschied zu `[from]: …` ausmacht (das ist immer der eigene Nutzer).
+  `[kwcollab <kurz>:<seq> | <Absender> | mensch|claude] <Text>` aus — Absender und Art stehen in der
+  Zeile, weil genau das den Unterschied zu `[from]: …` ausmacht (das ist immer der eigene Nutzer);
+  `<seq>` ist die Nachrichtennummer im Kanal (WI 11536314) und der Griff, mit dem der Agent den
+  vollen Text per `collab_get_message` nachholt.
+  **Geteilt, nicht gekappt (WI 11536314):** eine Nachricht, die nicht in EINE Zeile passt, wird in
+  nummerierte Teile `(1/3) …`, `(2/3) …`, `(3/3) …` zerlegt — jedes Teil eine eigene Monitor-Zeile,
+  in Reihenfolge, jedes mit vollem Kopf (sonst läse das Prompt-Fragment es als Zeile des eigenen
+  Nutzers). Das Budget für den Text wird aus dem **tatsächlichen** Kopf DIESER Zeile gerechnet
+  (500 Zeichen Harness-Grenze minus Kopf minus Zähler minus Reserve), nie als feste Zahl: der
+  Anzeigename kommt vom Relay und ist bis 128 Zeichen lang. Früher stand der Kürzungs-Marker
+  *hinter* dem Schnitt — der Harness kappte ein zweites Mal, und der Marker ging mit (Feldbefund:
+  die Nachricht sah vollständig aus und war es nicht). Ein einzelnes überlanges Wort wird hart
+  geschnitten, mit einem Marker, der **im** Budget liegt.
   **Eigene Nachrichten kommen NICHT zurück** in die Sitzung: der Relay spielt beim Reconnect bis zu
   500 Frames nach, die eigenen sind darunter, und die Session würde sonst ihre eigene Nachricht
   beantworten.
