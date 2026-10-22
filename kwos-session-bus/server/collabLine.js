@@ -58,9 +58,17 @@ export function collabShortId(collabId) {
  * (WI 11536314): the reader has to be able to NAME the line it lost, and `collab_get_message` is
  * addressed by exactly this seq. A line that is not a stored message (the "channel closed" system
  * line) has no seq -- the field is then left out, so the head keeps the older, seq-less form there.
+ *
+ * The predicate COERCES first and is byte-for-byte the relay's pinned copy
+ * (relay/lib.js::collabMonitorLine): a seq may arrive as a number OR as a string, and a mixed fleet
+ * means the two sides must read it the same way. Without the coercion a seq of "12" renders ":12"
+ * on the relay and drops the address here -- the reader would then have no way to fetch a line it
+ * could perfectly well fetch. `Number.isSafeInteger` (not `isInteger`) keeps a value that cannot be
+ * a real sequence number -- 1e21, NaN, Infinity -- out of the head.
  */
 function collabHead({ collabId, seq, who, kind }) {
-  const seqPart = Number.isInteger(seq) && seq > 0 ? `:${seq}` : "";
+  const n = Number(seq);
+  const seqPart = Number.isSafeInteger(n) && n > 0 ? `:${n}` : "";
   return `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)}${seqPart} | ${who} | ${kind}] `;
 }
 

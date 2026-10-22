@@ -16305,7 +16305,8 @@ function collabShortId(collabId) {
   return String(collabId || "").split("-")[0];
 }
 function collabHead({ collabId, seq, who, kind }) {
-  const seqPart = Number.isInteger(seq) && seq > 0 ? `:${seq}` : "";
+  const n = Number(seq);
+  const seqPart = Number.isSafeInteger(n) && n > 0 ? `:${n}` : "";
   return `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)}${seqPart} | ${who} | ${kind}] `;
 }
 function counterLength(n) {

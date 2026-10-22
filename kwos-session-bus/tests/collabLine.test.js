@@ -39,6 +39,22 @@ test("collabLine: ohne seq bleibt der Kopf in der alten Form (die Zeile ist kein
   assert.equal(line, "[kwcollab 7f3a1b2c | Mara K. | claude] t");
 });
 
+test("collabLine: eine seq als ZAHLENSTRING wird gelesen -- die Adresse bleibt", () => {
+  // Der Relay reicht die seq als Zahl ODER als String durch; seine festgeschriebene Fassung
+  // erzwingt die Zahl mit Number(seq). Ohne DIESELBE Toleranz faellt die Adresse hier weg -- der
+  // Leser haette dann keine Moeglichkeit mehr, eine Zeile nachzuholen, die er holen koennte.
+  // Dieselbe Regel auf beiden Seiten ist der Punkt, nicht die Bequemlichkeit.
+  const [line] = collabLine({ collabId: COLLAB, seq: "12", from: "Mara K.", kind: "claude", text: "t" });
+  assert.equal(line, "[kwcollab 7f3a1b2c:12 | Mara K. | claude] t");
+});
+
+test("collabLine: eine unbrauchbare seq faellt weg -- kein ':NaN' und kein ':1e+21' im Kopf", () => {
+  for (const bad of [null, undefined, 0, -1, "", "abc", 1.5, NaN, Infinity, 1e21, {}]) {
+    const [line] = collabLine({ collabId: COLLAB, seq: bad, from: "Mara K.", kind: "claude", text: "t" });
+    assert.equal(line, "[kwcollab 7f3a1b2c | Mara K. | claude] t", `seq=${String(bad)}`);
+  }
+});
+
 test("collabLine: ein Mensch wird als Mensch gekennzeichnet", () => {
   const [line] = collabLine({ collabId: "abc-1", seq: 3, from: "Jonas B.", kind: "human", text: "2.100 gilt." });
   assert.match(line, /\| human\] 2\.100 gilt\.$/);
