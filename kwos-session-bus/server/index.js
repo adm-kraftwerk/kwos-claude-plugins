@@ -285,6 +285,25 @@ export const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "collab_get_message",
+    description:
+      "Holt den vollständigen Text EINER Nachricht aus dem kwcollab-Kanal nach -- NICHT zu " +
+      "verwechseln mit get_message: das liest den Session-Verlauf, und Kanal-Nachrichten stehen " +
+      "dort nicht. Nötig, weil Claude Code jede Monitor-Zeile bei 500 Zeichen kappt: der Monitor " +
+      "teilt eine lange Nachricht deshalb in nummerierte Teile '(i/n)', und jede Zeile trägt die " +
+      "seq der Nachricht im Kopf '[kwcollab <kurz>:<seq> | <Absender> | <Art>]'. Mit dieser seq hier " +
+      "den vollen Text holen. Nur aufrufen, wenn der Rest tatsächlich gebraucht wird.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        seq: { type: "integer", description: "seq aus dem Kopf der Kanal-Zeile, z. B. die 7 aus '[kwcollab 7f3a1b2c:7 | ...]'" },
+        collab_id: { type: "string", description: "Nur nötig, wenn diese Session in mehreren Kanälen ist" },
+      },
+      required: ["seq"],
+      additionalProperties: false,
+    },
+  },
   // Code exchange (WI 11517979): own file, same `collab_` gate.
   ...CODE_TOOLS,
 ];
@@ -529,6 +548,18 @@ export async function handleToolCall(name, args = {}) {
           text: `Anhang (${mimeType}), Base64:\n${data}`,
         }],
       };
+    }
+    case "collab_get_message": {
+      // The channel is resolved first (same as every other collab tool): the seq is a number
+      // WITHIN a channel, and a session in two channels would otherwise have to guess which one.
+      const c = await collab.resolveCollab(args.collab_id);
+      const msg = await collab.getCollabMessage(c.collab_id, args.seq);
+      // The attachment is only ANNOUNCED, not fetched -- the same rule as everywhere else (no
+      // autowake; the session decides with collab_get_attachment).
+      const hint = msg.attachment_id
+        ? `\n[Anhang angekündigt, attachment_id=${msg.attachment_id} -- mit collab_get_attachment abrufbar]`
+        : "";
+      return { content: [{ type: "text", text: `${msg.text ?? ""}${hint}` }] };
     }
     default:
       throw new Error(`Unbekanntes Tool: ${name}`);

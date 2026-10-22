@@ -189,7 +189,7 @@ test("TOOLS enthaelt die kwcollab-Werkzeuge -- und KEIN Einladen/Rauswerfen/Schl
   const names = TOOLS.map((t) => t.name);
   for (const t of [
     "collab_status", "collab_send", "collab_accept", "collab_leases", "collab_lease",
-    "collab_release", "collab_get_attachment",
+    "collab_release", "collab_get_attachment", "collab_get_message",
   ]) {
     assert.ok(names.includes(t), `${t} fehlt in TOOLS`);
   }
@@ -230,6 +230,92 @@ test("collab_send schreibt ohne from_human als 'claude' und mit ihm als 'human'"
   } finally {
     mock.restore();
   }
+});
+
+// ── collab_get_message (WI 11536314) ─────────────────────────────────────────────────────────
+//
+// Die Kanal-Nachricht, die der Monitor teilt, traegt ihre seq im Kopf. Genau damit holt dieses
+// Werkzeug den vollen Text -- ueber die EIGENE Kanal-Route, nicht ueber den Session-Verlauf
+// (get_message): Kanal-Nachrichten stehen dort nicht.
+
+/** Ein Kanal dieses Logins, wie `GET /v1/collabs` ihn liefert. */
+const joinedCollab = () => ({
+  collab_id: "7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c",
+  workitem: "11536314",
+  my_status: "joined",
+  members: [{ subject: "u-mara", session_id: "sess-self", status: "joined" }],
+});
+
+/** Antwortet auf die Kanalliste und auf die Einzel-Nachricht; alles andere ist ein Testfehler. */
+const messageMock = (message) =>
+  installFetchMock((url) => {
+    const body = url.endsWith("/v1/collabs") ? { collabs: [joinedCollab()] } : { message };
+    return Promise.resolve({
+      ok: true, status: 200,
+      headers: { get: () => "application/json" },
+      json: async () => body,
+    });
+  });
+
+/** Der Kanal-Gate steht in dieser Suite sonst nur zufaellig offen (KWOS_COLLAB_CANARY der Maschine). */
+async function withCollabGate(fn) {
+  const prev = process.env.KWOS_COLLAB_CANARY;
+  process.env.KWOS_COLLAB_CANARY = "1";
+  try { return await fn(); } finally {
+    if (prev === undefined) delete process.env.KWOS_COLLAB_CANARY;
+    else process.env.KWOS_COLLAB_CANARY = prev;
+  }
+}
+
+test("collab_get_message holt den vollen Text EINER Kanal-Nachricht ueber ihre seq", async () => {
+  const full = "Befund: ".repeat(200); // laenger als eine Monitor-Zeile -- genau der Fall
+  const mock = messageMock({ seq: 12, text: full, attachment_id: null });
+  try {
+    await withCollabGate(async () => {
+      const out = await handleToolCall("collab_get_message", { seq: 12 });
+      assert.equal(out.content[0].text, full);
+      assert.match(
+        mock.calls[1].url,
+        /\/v1\/collabs\/7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c\/messages\/12$/,
+        "die Einzel-Nachricht kommt ueber die Kanal-Route, nicht ueber den Session-Verlauf",
+      );
+    });
+  } finally { mock.restore(); }
+});
+
+test("collab_get_message kuendigt einen Anhang an, holt ihn aber nicht selbst", async () => {
+  const mock = messageMock({ seq: 13, text: "kurz", attachment_id: "att-9" });
+  try {
+    await withCollabGate(async () => {
+      const out = await handleToolCall("collab_get_message", { seq: 13 });
+      assert.match(out.content[0].text, /kurz/);
+      assert.match(out.content[0].text, /attachment_id=att-9/);
+      assert.equal(mock.calls.length, 2, "kein Autowake: kein dritter Abruf");
+    });
+  } finally { mock.restore(); }
+});
+
+test("collab_get_message: eine 404 (unbekannte oder ausgeraeumte seq) wird zum Satz, nicht zu leerem Text", async () => {
+  const mock = installFetchMock((url) => {
+    if (url.endsWith("/v1/collabs")) {
+      return Promise.resolve({
+        ok: true, status: 200, headers: { get: () => "application/json" },
+        json: async () => ({ collabs: [joinedCollab()] }),
+      });
+    }
+    return Promise.resolve({
+      ok: false, status: 404, headers: { get: () => "application/json" },
+      text: async () => JSON.stringify({ error: "message unknown" }),
+    });
+  });
+  try {
+    await withCollabGate(async () => {
+      const out = await callTool({ params: { name: "collab_get_message", arguments: { seq: 99 } } });
+      assert.equal(out.isError, true);
+      assert.match(out.content[0].text, /404/);
+      assert.match(out.content[0].text, /message unknown/);
+    });
+  } finally { mock.restore(); }
 });
 
 test("collab_accept schickt die EIGENE session_id an den Relay", async () => {

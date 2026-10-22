@@ -224,6 +224,54 @@ test("getCollabAttachment: Bilder bleiben Bilder, Text bleibt Text", async () =>
   } finally { mock.restore(); }
 });
 
+// ── Eine einzelne Kanal-Nachricht (WI 11536314) ──────────────────────────────────────────────
+// Die geteilte Monitor-Zeile traegt die seq der Nachricht im Kopf; dieses Werkzeug holt darueber
+// den vollen Text. Es geht auf die EIGENE Kanal-Route (nicht auf den Session-Verlauf).
+test("getCollabMessage: GET auf die Kanal-Route mit der seq, und die Antwort ist die Nachricht", async () => {
+  const mock = installFetchMock(() =>
+    Promise.resolve({
+      ok: true, status: 200,
+      headers: { get: () => "application/json" },
+      json: async () => ({ message: { seq: 12, text: "der ganze Text", attachment_id: null } }),
+    })
+  );
+  try {
+    const msg = await collab.getCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", 12);
+    assert.equal(msg.text, "der ganze Text");
+    assert.match(mock.calls[0].url, /\/v1\/collabs\/7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c\/messages\/12$/);
+  } finally { mock.restore(); }
+});
+
+test("getCollabMessage: eine 404 wird als Satz weitergereicht, nicht als leere Nachricht", async () => {
+  const mock = installFetchMock(() =>
+    Promise.resolve({
+      ok: false, status: 404,
+      headers: { get: () => "application/json" },
+      text: async () => JSON.stringify({ error: "message unknown" }),
+    })
+  );
+  try {
+    await assert.rejects(
+      () => collab.getCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", 99),
+      (err) => {
+        assert.match(err.message, /404/);
+        assert.match(err.message, /message unknown/);
+        return true;
+      }
+    );
+  } finally { mock.restore(); }
+});
+
+test("getCollabMessage: eine unbrauchbare seq geht gar nicht erst auf die Leitung", async () => {
+  const mock = installFetchMock(() => Promise.resolve({ ok: true, status: 200 }));
+  try {
+    for (const bad of [0, -1, 1.5, "7", null, undefined]) {
+      await assert.rejects(() => collab.getCollabMessage("c-1", bad), /positive Ganzzahl/);
+    }
+    assert.equal(mock.calls.length, 0, "kein Request fuer eine seq, die keine ist");
+  } finally { mock.restore(); }
+});
+
 test("collabEventsUrl: der Kanal hat seinen eigenen SSE-Pfad", () => {
   assert.equal(
     collab.collabEventsUrl("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c"),

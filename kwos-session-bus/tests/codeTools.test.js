@@ -45,12 +45,15 @@ const codeFrame = (type, extra = {}) => JSON.stringify({
 });
 
 test("eine Code-Zeile weckt den Agenten nur mit wake -- eine Rueckfrage an die Menschen immer", () => {
-  assert.match(frameToLine(codeFrame("snapshot"), { selfSessionId: "me", wakeOnCode: true }), /code snapshot/);
+  // `frameToLine` gibt seit WI 11536314 eine LISTE von Zeilen zurueck (eine lange Nachricht kommt in
+  // nummerierten Teilen) -- die Zusagen hier sind unveraendert, nur die Form ist eine andere.
+  const lines = (raw, opts) => frameToLine(raw, opts)?.join("\n");
+  assert.match(lines(codeFrame("snapshot"), { selfSessionId: "me", wakeOnCode: true }), /code snapshot/);
   assert.equal(frameToLine(codeFrame("snapshot"), { selfSessionId: "me", wakeOnCode: false }), null);
-  assert.match(frameToLine(codeFrame("escalate"), { selfSessionId: "me", wakeOnCode: false }), /code escalate/);
+  assert.match(lines(codeFrame("escalate"), { selfSessionId: "me", wakeOnCode: false }), /code escalate/);
   // A chat line is never affected by the code mandate.
   const chat = JSON.stringify({ seq: 10, collab_id: "c1", from_subject: "kai", author_kind: "human", text: "hallo" });
-  assert.match(frameToLine(chat, { selfSessionId: "me", wakeOnCode: false }), /hallo/);
+  assert.match(lines(chat, { selfSessionId: "me", wakeOnCode: false }), /hallo/);
 });
 
 test("Vorabpruefung: ein fremder, noch nicht uebernommener Stand mit dieser Datei haelt den Edit an", () => {

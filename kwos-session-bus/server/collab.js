@@ -150,6 +150,28 @@ export async function getCollabAttachment(collabId, attachmentId, { fetchImpl = 
   return { mimeType, data: buf.toString("base64") };
 }
 
+/**
+ * GET /v1/collabs/{id}/messages/{seq} -- ONE message of the channel, full text (WI 11536314).
+ *
+ * The counterpart to the split monitor line: the line carries the message's `seq` in its head
+ * ("[kwcollab <short>:<seq> | ...]"), and this fetches the whole text behind it. Same access guard
+ * as the channel detail route on the relay side (membership), 404 for an unknown or swept seq --
+ * `call()` turns both into a sentence, so a refusal is never mistaken for an empty message.
+ *
+ * The text is NOT re-split here: it is the answer to a question, not a monitor line, and a tool
+ * result is not cut by the harness.
+ */
+export async function getCollabMessage(collabId, seq) {
+  if (!Number.isInteger(seq) || seq < 1) {
+    throw new Error(`collab_get_message: seq muss eine positive Ganzzahl sein (erhalten: ${JSON.stringify(seq)}).`);
+  }
+  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages/${encodeURIComponent(seq)}`);
+  // The route answers with the message under `message` (the same envelope as POST .../messages).
+  // A bare message object is accepted too: the route is new, and a shape this client cannot read
+  // would otherwise look like an empty message.
+  return data?.message ?? data ?? {};
+}
+
 /** GET /v1/collabs/{id}/leases -- who holds which section right now. */
 export async function listLeases(collabId) {
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/leases`);

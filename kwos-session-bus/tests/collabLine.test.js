@@ -1,79 +1,207 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { installFetchMock } from "./helpers/fetch-mock.js";
-import { collabLine, collabClosedLine, collabShortId, senderName, COLLAB_LINE_PREFIX } from "../server/collabLine.js";
+import {
+  collabLine, collabClosedLine, collabShortId, senderName, COLLAB_LINE_PREFIX,
+  MONITOR_LINE_MAX, LINE_SAFETY,
+} from "../server/collabLine.js";
 import { frameToLine } from "../server/collab-listen.js";
 import { MAX_LINE_CHARS } from "../server/listen.js";
 
-// kwcollab: die Zeile, die im Verlauf landet (WI 11482928).
+// kwcollab: die Zeile(n), die im Verlauf landen (WI 11482928; geteilt statt gekappt seit WI 11536314).
 //
 // Diese Zeile ist die Vertrauensgrenze des Features in Textform: das Prompt-Fragment im
 // litellm-Repo stuft genau die Zeilen mit diesem Praefix als FREMDDATEN ein. Wird das Format
 // weich, sieht eine Nachricht von Mara aus wie eine des eigenen Nutzers -- und wird ausgefuehrt.
-test("collabLine: Praefix, Kanal, Absender und Art stehen in JEDER Zeile", () => {
-  const line = collabLine({
-    collabId: "7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c",
+// Deshalb traegt JEDES Teil seinen eigenen Kopf: ein Teil ohne "[kwcollab" waere fuer das Fragment
+// eine Zeile des eigenen Nutzers.
+
+const COLLAB = "7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c";
+
+/** Kopf und "(i/n) "-Zaehler abziehen: uebrig bleibt genau der Text, der in diesem Teil steht. */
+const bodyOf = (line) => line.replace(/^\[kwcollab [^\]]*\] /, "").replace(/^\(\d+\/\d+\) /, "");
+
+test("collabLine: Praefix, Kanal, seq, Absender und Art stehen in JEDER Zeile", () => {
+  const lines = collabLine({
+    collabId: COLLAB,
+    seq: 7,
     from: "Mara K.",
     kind: "claude",
     text: "Befund: Proxy bricht nach 60 s ab.",
   });
-  assert.equal(line, `${COLLAB_LINE_PREFIX} 7f3a1b2c | Mara K. | claude] Befund: Proxy bricht nach 60 s ab.`);
-  assert.ok(line.startsWith("[kwcollab"), "muss mit dem Praefix beginnen, auf den das Prompt-Fragment zeigt");
+  assert.deepEqual(lines, [`${COLLAB_LINE_PREFIX} 7f3a1b2c:7 | Mara K. | claude] Befund: Proxy bricht nach 60 s ab.`]);
+  assert.ok(lines[0].startsWith("[kwcollab"), "muss mit dem Praefix beginnen, auf den das Prompt-Fragment zeigt");
+});
+
+test("collabLine: ohne seq bleibt der Kopf in der alten Form (die Zeile ist keine Nachricht)", () => {
+  // Die Systemzeile "Kanal beendet" ist keine gespeicherte Nachricht: es gibt nichts zu benennen
+  // und nichts nachzuholen. Das Feld fehlt dann ganz, statt ":undefined" zu heissen.
+  const [line] = collabLine({ collabId: COLLAB, from: "Mara K.", kind: "claude", text: "t" });
+  assert.equal(line, "[kwcollab 7f3a1b2c | Mara K. | claude] t");
 });
 
 test("collabLine: ein Mensch wird als Mensch gekennzeichnet", () => {
-  const line = collabLine({ collabId: "abc-1", from: "Jonas B.", kind: "human", text: "2.100 gilt." });
+  const [line] = collabLine({ collabId: "abc-1", seq: 3, from: "Jonas B.", kind: "human", text: "2.100 gilt." });
   assert.match(line, /\| human\] 2\.100 gilt\.$/);
 });
 
 test("collabLine: unbekannte Art faellt auf claude zurueck, nie auf human", () => {
   // Ein Client, der "human" faelscht oder etwas Unbekanntes schickt, darf nie als Mensch gelten.
   for (const kind of ["bogus", "", null, undefined, "Human"]) {
-    assert.match(collabLine({ collabId: "a-1", from: "X", kind, text: "t" }), /\| claude\]/);
+    const [line] = collabLine({ collabId: "a-1", seq: 1, from: "X", kind, text: "t" });
+    assert.match(line, /\| claude\]/);
   }
 });
 
 test("collabLine: ohne Text, aber mit Anhang nennt sie den Anhang statt leer zu enden", () => {
-  const line = collabLine({
-    collabId: "a-1", from: "Mara K.", kind: "claude", text: "", attachmentId: "11111111-1111-1111-1111-111111111111",
+  const [line] = collabLine({
+    collabId: "a-1", seq: 4, from: "Mara K.", kind: "claude", text: "",
+    attachmentId: "11111111-1111-1111-1111-111111111111",
   });
   assert.match(line, /collab_get_attachment 11111111-1111-1111-1111-111111111111/);
 });
 
-test("collabLine: eine lange Nachricht wird gekappt und nennt die volle Laenge", () => {
-  const line = collabLine({ collabId: "a-1", from: "X", kind: "claude", text: "z".repeat(5000), maxChars: 100 });
-  assert.ok(line.length < 200, `Zeile zu lang: ${line.length}`);
-  assert.match(line, /\[gekürzt, 5000 Zeichen\]$/);
-});
-
-// Review-Fund 2026-10-16: gekappt werden muss die GANZE Zeile, nicht der Text. Claude Code kappt
-// jede Monitor-Zeile bei 500 Zeichen und zwar am ZEILENENDE (WI 11075502, gemessen) -- genau dort,
-// wo der Kuerzungs-Marker steht. Nur den Text zu kappen brachte die Zeile auf ~540-560 Zeichen: die
-// Kappung frass den Marker, und die Nachricht kam abgeschnitten an, ohne dass es jemand sah.
-test("collabLine: die ganze Zeile bleibt im Budget, auch im Worst Case", () => {
-  const line = collabLine({
-    collabId: "7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c",
-    from: "M".repeat(120),            // der Absender kommt vom Relay, seine Laenge ist nicht unsere
-    kind: "claude",
-    text: "z".repeat(5000),
-    attachmentId: "11111111-1111-1111-1111-111111111111",
-  });
-  assert.ok(line.length <= MAX_LINE_CHARS, `Zeile zu lang: ${line.length}`);
-  assert.match(line, /\[gekürzt, 5000 Zeichen\]$/, "der Marker muss die Kappung ueberleben");
-});
-
 test("collabLine: ein fehlender Absender wird nicht erfunden", () => {
-  assert.match(collabLine({ collabId: "a-1", from: null, kind: "claude", text: "t" }), /\| \? \|/);
+  const [line] = collabLine({ collabId: "a-1", seq: 1, from: null, kind: "claude", text: "t" });
+  assert.match(line, /\| \? \|/);
 });
 
-test("collabClosedLine: sagt, dass der Kanal weg ist", () => {
-  const line = collabClosedLine("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c");
+// ── Teilen statt kappen (WI 11536314) ────────────────────────────────────────────────────────
+//
+// Der Feldbefund: die Zeile landete ueber der 500er-Grenze, der Harness kappte ein ZWEITES Mal --
+// am Zeilenende, wo der Marker stand. Der Empfaenger sah eine Nachricht, die vollstaendig aussah,
+// und hatte keine Moeglichkeit, den Rest zu benennen. Diese Tests halten die drei Zusagen fest:
+// jedes Teil im Budget, die Teile in Reihenfolge, und der Text geht nicht verloren.
+
+test("collabLine: eine lange Nachricht kommt in nummerierten Teilen, jedes Teil im Budget", () => {
+  const words = Array.from({ length: 200 }, (_, i) => `wort${i}`);
+  const text = words.join(" ");
+  const lines = collabLine({ collabId: COLLAB, seq: 42, from: "Mara K.", kind: "claude", text });
+
+  assert.ok(lines.length > 1, "eine 200-Wort-Nachricht passt nicht in eine Zeile");
+  lines.forEach((line, i) => {
+    assert.ok(line.length <= MAX_LINE_CHARS, `Teil ${i + 1} ist ${line.length} Zeichen lang`);
+    assert.ok(line.length <= MONITOR_LINE_MAX, `Teil ${i + 1} liegt ueber der gemessenen Harness-Grenze`);
+    assert.ok(line.startsWith(COLLAB_LINE_PREFIX), `Teil ${i + 1} beginnt nicht mit dem Praefix -- das Fragment liest ihn dann als eigene Zeile`);
+    assert.match(line, new RegExp(`^\\[kwcollab 7f3a1b2c:42 \\| Mara K\\. \\| claude\\] \\(${i + 1}/${lines.length}\\) `));
+  });
+
+  // DER TEXT GEHT NICHT VERLOREN: an den Nahtstellen faellt genau das eine Trennzeichen weg, also
+  // setzt ein Leerzeichen beim Zusammensetzen den Originaltext wieder her.
+  assert.equal(lines.map(bodyOf).join(" "), text);
+});
+
+test("collabLine: eine Nachricht, die genau ins Budget passt, bleibt EINE Zeile", () => {
+  const head = `[kwcollab 7f3a1b2c:5 | X | claude] `;
+  const budget = MONITOR_LINE_MAX - head.length - LINE_SAFETY;
+  const fits = "a".repeat(budget);
+  assert.deepEqual(
+    collabLine({ collabId: COLLAB, seq: 5, from: "X", kind: "claude", text: fits }),
+    [`${head}${fits}`],
+    "genau das Budget passt in EINE Zeile -- ohne Zaehler, denn es gibt nichts zu zaehlen",
+  );
+
+  // Ein Zeichen mehr heisst: teilen. Und der Text bleibt vollstaendig (ein Wort ohne Leerzeichen
+  // wird hart geschnitten -- dabei faellt kein Zeichen weg, der Marker wird abgezogen).
+  const over = fits + "a";
+  const lines = collabLine({ collabId: COLLAB, seq: 5, from: "X", kind: "claude", text: over });
+  assert.ok(lines.length > 1, "ein Zeichen ueber dem Budget muss geteilt werden");
+  for (const line of lines) assert.ok(line.length <= MAX_LINE_CHARS, `Zeile ist ${line.length} Zeichen lang`);
+  assert.equal(lines.map(bodyOf).join("").replace(/…\[\+\d+ Zeichen\]/g, ""), over);
+});
+
+test("collabLine: der '(i/n) '-Zaehler zaehlt gegen das Budget", () => {
+  // Genau der Fehler, der WI 11536314 ausgeloest hat: das Budget ohne den Zaehler rechnen und ihn
+  // dann davorschreiben. Die Zeile landet dann ueber der Grenze und der Harness kappt sie.
+  // Hier: so viele Teile, dass der Zaehler zweistellig wird -- die breiteste Form.
+  const text = "wort ".repeat(1000).trim();
+  const lines = collabLine({ collabId: COLLAB, seq: 9, from: "Mara K.", kind: "claude", text });
+  assert.ok(lines.length >= 10, `zu wenige Teile fuer den zweistelligen Zaehler: ${lines.length}`);
+  for (const line of lines) {
+    assert.ok(line.length <= MAX_LINE_CHARS, `Zeile mit Zaehler ist ${line.length} Zeichen lang`);
+    // Der Text eines Teils passt genau in "Budget minus Kopf minus Zaehler".
+    const head = line.match(/^\[kwcollab [^\]]*\] /)[0];
+    const counter = line.match(/^\[kwcollab [^\]]*\] (\(\d+\/\d+\) )/)[1];
+    assert.ok(bodyOf(line).length <= MAX_LINE_CHARS - head.length - counter.length,
+      `Textteil zu lang: ${bodyOf(line).length}`);
+  }
+});
+
+test("collabLine: ein einzelnes ueberlanges Wort wird hart geschnitten, der Marker UEBERLEBT", () => {
+  // Der gemeldete Defekt in Reinform: ein Wort ohne Leerzeichen. Der Marker wurde frueher NACH dem
+  // Schnitt angehaengt und fiel damit selbst weg. Jetzt ist er im Budget reserviert.
+  const word = "x".repeat(2000);
+  const lines = collabLine({ collabId: COLLAB, seq: 11, from: "Mara K.", kind: "claude", text: word });
+  assert.ok(lines.length > 1);
+  for (const line of lines) {
+    assert.ok(line.length <= MAX_LINE_CHARS, `Zeile ist ${line.length} Zeichen lang`);
+  }
+  // Jedes Teil ausser dem letzten sagt, wie viel an DIESER Stelle fehlt -- und der Marker ist da,
+  // nicht weggekappt.
+  for (const line of lines.slice(0, -1)) {
+    assert.match(line, /…\[\+\d+ Zeichen\]$/, `Marker fehlt oder ist gekappt: ${line.slice(-40)}`);
+  }
+  assert.equal(lines[lines.length - 1].endsWith("Zeichen]"), false, "das letzte Teil hat nichts mehr nachzutragen");
+  // Und die Zeichen des Wortes sind alle noch da (Marker abgezogen).
+  const rebuilt = lines.map(bodyOf).map((p) => p.replace(/…\[\+\d+ Zeichen\]$/, "")).join("");
+  assert.equal(rebuilt, word);
+});
+
+test("collabLine: der Worst Case (128 Zeichen Absendername) rechnet sich aus dem ECHTEN Kopf", () => {
+  // Der Anzeigename kommt vom Relay und ist bis 128 Zeichen lang. Ein festes Textbudget waere fuer
+  // diesen Namen zu gross -- genau dort ginge der Rest verloren. Hier steht die Arithmetik.
+  const name = "M".repeat(128);
+  const head = `[kwcollab 7f3a1b2c:7 | ${name} | claude] `;
+  assert.equal(head.length, 162, "Kopf-Arithmetik: 10 + 8 + 2 + 3 + 128 + 3 + 6 + 2");
+  assert.equal(MONITOR_LINE_MAX - head.length - LINE_SAFETY, 318, "Textbudget im Worst Case");
+
+  const lines = collabLine({ collabId: COLLAB, seq: 7, from: name, kind: "claude", text: "z".repeat(5000) });
+  assert.ok(lines.length > 1);
+  for (const line of lines) {
+    assert.ok(line.length <= MAX_LINE_CHARS, `Zeile ist ${line.length} Zeichen lang (Grenze ${MAX_LINE_CHARS})`);
+  }
+  // Kein Teil ist leer und der Text steht vollstaendig darin. Ein Wort ohne Leerzeichen wird hart
+  // geschnitten -- dabei faellt KEIN Zeichen weg (anders als beim Wortgrenzen-Schnitt, der genau
+  // das eine Trennzeichen entfernt), also setzt die leere Verkettung das Wort wieder her.
+  assert.equal(lines.map(bodyOf).join("").replace(/…\[\+\d+ Zeichen\]/g, ""), "z".repeat(5000));
+});
+
+test("collabLine: der Worst Case mit dem ABSOLUT breitesten Kopf bleibt im Budget", () => {
+  // 128 Zeichen Name, sechsstellige seq, laengste Art ("system" statt "claude") -- alles, was der
+  // Kopf an Breite aufnehmen kann, in EINER Zeile.
+  const name = "M".repeat(128);
+  const head = `[kwcollab 7f3a1b2c:999999 | ${name} | system] `;
+  assert.equal(head.length, 167, "10 + 8 + 7 + 3 + 128 + 3 + 6 + 2");
+  const lines = collabLine({ collabId: COLLAB, seq: 999999, from: name, kind: "system", text: "wort ".repeat(200) });
+  for (const line of lines) {
+    assert.ok(line.length <= MAX_LINE_CHARS, `Zeile ist ${line.length} Zeichen lang`);
+    assert.match(line, /^\[kwcollab 7f3a1b2c:999999 \|/);
+  }
+});
+
+test("collabLine: auch bei engem Budget bleibt jedes Teil im Budget (Zaehler-Festpunkt)", () => {
+  // Der schmale Fall: langer Kopf UND kleiner cap. Hier waechst der Zaehler, waehrend das Budget
+  // schrumpft -- genau die Iteration, die den Zaehler einrechnet. Kein Teil darf die Grenze reissen.
+  const name = "M".repeat(128);
+  const text = "wort ".repeat(200).trim();
+  const lines = collabLine({ collabId: COLLAB, seq: 999999, from: name, kind: "system", text, cap: 200, safety: 10 });
+  assert.ok(lines.length > 1);
+  for (const line of lines) {
+    assert.ok(line.length <= 200, `Zeile ist ${line.length} Zeichen lang (cap 200)`);
+    assert.match(line, /\(\d+\/\d+\) /);
+  }
+  assert.equal(lines.map(bodyOf).join(" "), text);
+});
+
+// ── Kanal-Ende, Kurz-ID, Absendername ────────────────────────────────────────────────────────
+test("collabClosedLine: sagt, dass der Kanal weg ist -- und traegt KEINE seq", () => {
+  const line = collabClosedLine(COLLAB);
   assert.match(line, /^\[kwcollab 7f3a1b2c \| system\]/);
   assert.match(line, /beendet/i);
+  assert.ok(!/:\d+ \|/.test(line), "die Systemzeile ist keine Nachricht und hat keine seq");
 });
 
 test("collabShortId: die erste UUID-Gruppe reicht, um zwei Kanaele zu unterscheiden", () => {
-  assert.equal(collabShortId("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c"), "7f3a1b2c");
+  assert.equal(collabShortId(COLLAB), "7f3a1b2c");
   assert.equal(collabShortId(null), "");
 });
 
@@ -86,15 +214,28 @@ test("senderName: der Anzeigename, sonst der Login, sonst der Systemname", () =>
 });
 
 // ── Die Naht Frame -> Zeile: hier entscheidet sich, was die Session ueberhaupt zu sehen bekommt ──
-test("frameToLine: eine fremde Nachricht wird zu einer Kanal-Zeile", () => {
+test("frameToLine: eine fremde Nachricht wird zu einer Kanal-Zeile mit ihrer seq", () => {
   const raw = JSON.stringify({
-    seq: 7, collab_id: "7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", from_session: "s-mara",
+    seq: 7, collab_id: COLLAB, from_session: "s-mara",
     from_subject: "u-mara", author_kind: "claude", text: "12 Requests, alle 200.",
   });
-  const line = frameToLine(raw, {
+  const lines = frameToLine(raw, {
     members: [{ subject: "u-mara", display_name: "Mara K." }], selfSessionId: "s-me",
   });
-  assert.equal(line, "[kwcollab 7f3a1b2c | Mara K. | claude] 12 Requests, alle 200.");
+  assert.deepEqual(lines, ["[kwcollab 7f3a1b2c:7 | Mara K. | claude] 12 Requests, alle 200."]);
+});
+
+test("frameToLine: eine lange Nachricht wird zu MEHREREN Zeilen, in Reihenfolge", () => {
+  const text = "wort ".repeat(300).trim();
+  const raw = JSON.stringify({
+    seq: 21, collab_id: COLLAB, from_session: "s-mara",
+    from_subject: "u-mara", author_kind: "claude", text,
+  });
+  const lines = frameToLine(raw, { members: [{ subject: "u-mara", display_name: "Mara K." }], selfSessionId: "s-me" });
+  assert.ok(lines.length > 1);
+  assert.match(lines[0], /^\[kwcollab 7f3a1b2c:21 \| Mara K\. \| claude\] \(1\//);
+  assert.match(lines[1], /^\[kwcollab 7f3a1b2c:21 \| Mara K\. \| claude\] \(2\//);
+  assert.equal(lines.map(bodyOf).join(" "), text);
 });
 
 test("frameToLine: die EIGENE Nachricht des Agenten kommt NICHT zurueck in die Session", () => {
@@ -116,15 +257,16 @@ test("frameToLine: eine MENSCHEN-Nachricht aus DIESER Sitzung kommt AN", () => {
     seq: 12, collab_id: "c-1", from_session: "s-me", from_subject: "u-jonas",
     author_kind: "human", text: "Fasse die wichtigsten Schritte zusammen.",
   });
-  const line = frameToLine(raw, { selfSessionId: "s-me" });
-  assert.ok(line !== null, "die Menschen-Nachricht darf NICHT verworfen werden");
-  assert.match(line, /Fasse die wichtigsten Schritte zusammen\./);
-  assert.match(line, /\| human\]/);
+  const lines = frameToLine(raw, { selfSessionId: "s-me" });
+  assert.ok(lines !== null, "die Menschen-Nachricht darf NICHT verworfen werden");
+  assert.match(lines.join("\n"), /Fasse die wichtigsten Schritte zusammen\./);
+  assert.match(lines.join("\n"), /\| human\]/);
 });
 
-test("frameToLine: das Kanal-Ende ist eine Systemzeile, kein leerer Text", () => {
-  const line = frameToLine(JSON.stringify({ collab_id: "7f3a1b2c-9d4e" }), { selfSessionId: "s-me" });
-  assert.match(line, /^\| system\]|^\[kwcollab 7f3a1b2c \| system\]/);
+test("frameToLine: das Kanal-Ende ist eine Systemzeile ohne seq, kein leerer Text", () => {
+  const lines = frameToLine(JSON.stringify({ collab_id: "7f3a1b2c-9d4e" }), { selfSessionId: "s-me" });
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /^\[kwcollab 7f3a1b2c \| system\]/);
 });
 
 test("frameToLine: unlesbare Frames erzeugen keine erfundene Zeile", () => {

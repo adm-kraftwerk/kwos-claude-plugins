@@ -16004,6 +16004,13 @@ async function getCollabAttachment(collabId, attachmentId, { fetchImpl = fetch }
   const buf = Buffer.from(await res.arrayBuffer());
   return { mimeType, data: buf.toString("base64") };
 }
+async function getCollabMessage(collabId, seq) {
+  if (!Number.isInteger(seq) || seq < 1) {
+    throw new Error(`collab_get_message: seq muss eine positive Ganzzahl sein (erhalten: ${JSON.stringify(seq)}).`);
+  }
+  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages/${encodeURIComponent(seq)}`);
+  return data?.message ?? data ?? {};
+}
 async function listLeases(collabId) {
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/leases`);
   return Array.isArray(data?.leases) ? data.leases : [];
@@ -16290,21 +16297,59 @@ if (isMain) {
 }
 
 // server/collabLine.js
+var MONITOR_LINE_MAX = 500;
+var LINE_SAFETY = 20;
 var COLLAB_LINE_PREFIX = "[kwcollab";
 var COLLAB_KINDS = ["human", "claude", "system"];
 function collabShortId(collabId) {
   return String(collabId || "").split("-")[0];
 }
-function collabLine({ collabId, from, kind, text: text2, attachmentId, maxChars = MAX_LINE_CHARS }) {
+function collabHead({ collabId, seq, who, kind }) {
+  const seqPart = Number.isInteger(seq) && seq > 0 ? `:${seq}` : "";
+  return `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)}${seqPart} | ${who} | ${kind}] `;
+}
+function counterLength(n) {
+  return `(${n}/${n}) `.length;
+}
+var hardCutMarker = (missing) => `\u2026[+${missing} Zeichen]`;
+function splitAtWords(body, budget) {
+  const parts = [];
+  let rest = body.replace(/^\s+/, "");
+  while (rest.length > budget) {
+    const cut = rest.lastIndexOf(" ", budget);
+    if (cut > 0) {
+      parts.push(rest.slice(0, cut));
+      rest = rest.slice(cut + 1).replace(/^\s+/, "");
+      continue;
+    }
+    const keep = Math.max(1, budget - hardCutMarker(rest.length).length);
+    parts.push(rest.slice(0, keep) + hardCutMarker(rest.length - keep));
+    rest = rest.slice(keep);
+  }
+  if (rest) parts.push(rest);
+  return parts.length ? parts : [""];
+}
+function splitIntoLines(head, body, { cap, safety }) {
+  const base = cap - head.length - safety;
+  if (body.length <= base) return [head + body];
+  let counterWidth = 0;
+  let parts;
+  for (let i = 0; i < 12; i++) {
+    parts = splitAtWords(body, Math.max(1, base - counterWidth));
+    const need = counterLength(parts.length);
+    if (need <= counterWidth) break;
+    counterWidth = need;
+  }
+  const total = parts.length;
+  return parts.map((p, i) => `${head}(${i + 1}/${total}) ${p}`);
+}
+function collabLine({ collabId, seq = null, from, kind, text: text2, attachmentId, cap = MONITOR_LINE_MAX, safety = LINE_SAFETY }) {
   const who = typeof from === "string" && from.trim() ? from.trim() : "?";
   const authorKind = COLLAB_KINDS.includes(kind) ? kind : "claude";
   let body = typeof text2 === "string" ? text2.trim() : "";
   if (!body && attachmentId) body = `[Anhang: mit collab_get_attachment ${attachmentId} abrufbar]`;
-  const head = `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)} | ${who} | ${authorKind}] `;
-  if (head.length + body.length <= maxChars) return head + body;
-  const marker = `\u2026 [gek\xFCrzt, ${body.length} Zeichen]`;
-  const keep = Math.max(0, maxChars - head.length - marker.length);
-  return `${head}${body.slice(0, keep)}${marker}`.slice(0, maxChars);
+  const head = collabHead({ collabId, seq, who, kind: authorKind });
+  return splitIntoLines(head, body, { cap, safety });
 }
 function collabClosedLine(collabId) {
   return `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)} | system] Kanal beendet -- Protokoll auf dem Server geloescht.`;
@@ -16904,13 +16949,14 @@ function frameToLine(raw, { members = [], selfSessionId = null, collabId = null,
     return null;
   }
   if (!msg || typeof msg !== "object") return null;
-  if (!msg.seq) return msg.collab_id ? collabClosedLine(msg.collab_id) : null;
+  if (!msg.seq) return msg.collab_id ? [collabClosedLine(msg.collab_id)] : null;
   if (Number(msg.seq) <= Number(after)) return null;
   if (selfSessionId && msg.from_session === selfSessionId && msg.author_kind !== "human") return null;
   if (takeOwnHumanLine(msg.seq)) return null;
   if (msg.kind === "code" && !wakeOnCode && msg.payload?.type !== "escalate") return null;
   return collabLine({
     collabId: msg.collab_id || collabId,
+    seq: msg.seq,
     from: senderName(msg, members),
     kind: msg.author_kind,
     text: msg.text,
@@ -16998,7 +17044,7 @@ async function startCollabListener({ writeLine, env = process.env, stdin = proce
       log.info("Collab-Kanal verbunden.", { collabId: c.collab_id, workitem: c.workitem });
       runSseReceiver(
         (raw) => {
-          const line = frameToLine(raw, {
+          const lines = frameToLine(raw, {
             members: entry.members,
             selfSessionId: config2.sessionId,
             collabId: c.collab_id,
@@ -17007,9 +17053,9 @@ async function startCollabListener({ writeLine, env = process.env, stdin = proce
             after: entry.printedSeq,
             wakeOnCode: entry.wake !== false
           });
-          if (!line) return;
+          if (!lines) return;
           entry.printedSeq = Math.max(entry.printedSeq, seqOf(raw));
-          writeLine(line);
+          for (const line of lines) writeLine(line);
         },
         {
           signal: controller.signal,
@@ -17902,6 +17948,19 @@ var TOOLS = [
       additionalProperties: false
     }
   },
+  {
+    name: "collab_get_message",
+    description: "Holt den vollst\xE4ndigen Text EINER Nachricht aus dem kwcollab-Kanal nach -- NICHT zu verwechseln mit get_message: das liest den Session-Verlauf, und Kanal-Nachrichten stehen dort nicht. N\xF6tig, weil Claude Code jede Monitor-Zeile bei 500 Zeichen kappt: der Monitor teilt eine lange Nachricht deshalb in nummerierte Teile '(i/n)', und jede Zeile tr\xE4gt die seq der Nachricht im Kopf '[kwcollab <kurz>:<seq> | <Absender> | <Art>]'. Mit dieser seq hier den vollen Text holen. Nur aufrufen, wenn der Rest tats\xE4chlich gebraucht wird.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        seq: { type: "integer", description: "seq aus dem Kopf der Kanal-Zeile, z. B. die 7 aus '[kwcollab 7f3a1b2c:7 | ...]'" },
+        collab_id: { type: "string", description: "Nur n\xF6tig, wenn diese Session in mehreren Kan\xE4len ist" }
+      },
+      required: ["seq"],
+      additionalProperties: false
+    }
+  },
   // Code exchange (WI 11517979): own file, same `collab_` gate.
   ...CODE_TOOLS
 ];
@@ -18067,6 +18126,13 @@ async function handleToolCall(name, args = {}) {
 ${data}`
         }]
       };
+    }
+    case "collab_get_message": {
+      const c = await resolveCollab(args.collab_id);
+      const msg = await getCollabMessage(c.collab_id, args.seq);
+      const hint = msg.attachment_id ? `
+[Anhang angek\xFCndigt, attachment_id=${msg.attachment_id} -- mit collab_get_attachment abrufbar]` : "";
+      return { content: [{ type: "text", text: `${msg.text ?? ""}${hint}` }] };
     }
     default:
       throw new Error(`Unbekanntes Tool: ${name}`);
