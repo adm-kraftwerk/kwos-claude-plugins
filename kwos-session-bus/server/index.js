@@ -177,6 +177,14 @@ export const TOOLS = [
       type: "object",
       properties: {
         text: { type: "string", description: "Die Nachricht (kurz; Belege lieber als Anhang)" },
+        summary: {
+          type: "string",
+          description:
+            "Die Kurzform der Nachricht: EIN Satz, höchstens 280 Zeichen, ohne Zeilenumbruch. " +
+            "Der Kanal zeigt sie statt des Volltexts und klappt den Volltext nur auf Wunsch auf. " +
+            "Setze sie immer, wenn `text` länger als drei Zeilen ist (Diff, Log, Auszug); bei " +
+            "einer kurzen Nachricht lass sie weg.",
+        },
         collab_id: { type: "string", description: "Nur nötig, wenn diese Session in mehreren Kanälen ist" },
         from_human: {
           type: "boolean",
@@ -468,7 +476,8 @@ export async function handleToolCall(name, args = {}) {
     case "collab_send": {
       const c = await collab.resolveCollab(args.collab_id);
       const fromHuman = args.from_human === true;
-      const sent = await collab.sendCollabMessage(c.collab_id, args.text, args.attachment_id ?? null, fromHuman);
+      const sent = await collab.sendCollabMessage(
+        c.collab_id, args.text, args.attachment_id ?? null, fromHuman, args.summary ?? null);
       return {
         content: [{
           type: "text",

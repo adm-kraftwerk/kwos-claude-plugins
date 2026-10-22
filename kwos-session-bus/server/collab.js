@@ -105,8 +105,13 @@ export async function collabDetail(collabId) {
  * person's. `collab_send` passes the human's own words on with `fromHuman: true`, because the pause
  * counter counts agent messages in a row without a human and a relayed order IS the human speaking.
  * The relay trusts the caller for this kind, so the flag says what the input was, it grants nothing.
+ *
+ * The SHORT FORM (WI 11538037) rides along when the caller wrote one: the surfaces fold a long line
+ * down to it and keep the text behind a disclose, so a pasted diff no longer pushes the rest of the
+ * channel off the screen. It is a courtesy, not a condition -- a line without one still arrives, and
+ * the surfaces then take its first sentence. An older relay ignores the field.
  */
-export async function sendCollabMessage(collabId, text, attachmentId = null, fromHuman = false) {
+export async function sendCollabMessage(collabId, text, attachmentId = null, fromHuman = false, summary = null) {
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages`, {
     method: "POST",
     body: {
@@ -114,6 +119,7 @@ export async function sendCollabMessage(collabId, text, attachmentId = null, fro
       author_kind: fromHuman ? "human" : "claude",
       session_id: config.sessionId,
       ...(attachmentId ? { attachment_id: attachmentId } : {}),
+      ...(typeof summary === "string" && summary.trim() !== "" ? { summary: summary.trim() } : {}),
     },
   });
   // A line we relayed as the human comes back to us looking exactly like the human's own (s.

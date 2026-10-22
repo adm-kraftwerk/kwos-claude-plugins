@@ -121,6 +121,21 @@ test("sendCollabMessage: schickt als claude MIT der eigenen session_id", async (
   } finally { mock.restore(); }
 });
 
+test("sendCollabMessage: die Kurzform faehrt nur mit, wenn es eine gibt (WI 11538037)", async () => {
+  const mock = installFetchMock(() => jsonResponse({ message: { seq: 3 }, claude_streak: 1 }, 201));
+  try {
+    await collab.sendCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", "Diff im Anhang", null, false,
+      "  Diff in drei Dateien, tsc gruen.  ");
+    assert.equal(JSON.parse(mock.calls[0].init.body).summary, "Diff in drei Dateien, tsc gruen.");
+    // Ohne Kurzform geht das Feld NICHT hinaus: der Relay faellt dann auf die erste Textzeile
+    // zurueck, und ein leerer String waere dort ein 400.
+    await collab.sendCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", "kurz");
+    assert.equal("summary" in JSON.parse(mock.calls[1].init.body), false);
+    await collab.sendCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", "kurz", null, false, "   ");
+    assert.equal("summary" in JSON.parse(mock.calls[2].init.body), false);
+  } finally { mock.restore(); }
+});
+
 test("sendCollabMessage: die Pause (409) wird als Satz weitergereicht, nicht als Retry", async () => {
   const mock = installFetchMock(() =>
     jsonResponse({ error: "paused after 10 claude messages without a human" }, 409)
