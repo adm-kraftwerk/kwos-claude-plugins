@@ -121,18 +121,39 @@ test("sendCollabMessage: schickt als claude MIT der eigenen session_id", async (
   } finally { mock.restore(); }
 });
 
+test("clampSummary: was der Relay nicht annimmt, kostet die Kurzform und nie die Nachricht", () => {
+  // Ein Modell schreibt zwei Saetze oder einen sehr langen: der Relay wuerde mit 400 antworten, und
+  // die GANZE Nachricht fiele mit. Also wird hier gefaltet, was nicht als eine Zeile durchgeht.
+  assert.equal(collab.clampSummary("  Diff in drei Dateien, tsc gruen.  "), "Diff in drei Dateien, tsc gruen.");
+  assert.equal(collab.clampSummary("erste Zeile\nzweite Zeile"), "erste Zeile zweite Zeile");
+  assert.equal(collab.clampSummary(""), null);
+  assert.equal(collab.clampSummary("   \n  "), null);
+  assert.equal(collab.clampSummary(undefined), null);
+  assert.equal(collab.clampSummary(42), null);
+  const long = collab.clampSummary(`${"Wort ".repeat(200)}Ende`);
+  assert.ok(long.length <= collab.SUMMARY_MAX, `zu lang: ${long.length}`);
+  assert.ok(long.endsWith("…"));
+  assert.ok(!long.includes("\n"));
+});
+
 test("sendCollabMessage: die Kurzform faehrt nur mit, wenn es eine gibt (WI 11538037)", async () => {
   const mock = installFetchMock(() => jsonResponse({ message: { seq: 3 }, claude_streak: 1 }, 201));
   try {
     await collab.sendCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", "Diff im Anhang", null, false,
       "  Diff in drei Dateien, tsc gruen.  ");
     assert.equal(JSON.parse(mock.calls[0].init.body).summary, "Diff in drei Dateien, tsc gruen.");
+    // Mehrzeilig oder zu lang: was hinausgeht, ist EINE Zeile innerhalb der Grenze des Relays.
+    await collab.sendCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", "Diff im Anhang", null, false,
+      `Befund im Anhang.\n${"Wort ".repeat(120)}`);
+    const sent = JSON.parse(mock.calls[1].init.body).summary;
+    assert.ok(!sent.includes("\n"));
+    assert.ok(sent.length <= collab.SUMMARY_MAX);
     // Ohne Kurzform geht das Feld NICHT hinaus: der Relay faellt dann auf die erste Textzeile
     // zurueck, und ein leerer String waere dort ein 400.
     await collab.sendCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", "kurz");
-    assert.equal("summary" in JSON.parse(mock.calls[1].init.body), false);
-    await collab.sendCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", "kurz", null, false, "   ");
     assert.equal("summary" in JSON.parse(mock.calls[2].init.body), false);
+    await collab.sendCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", "kurz", null, false, "   ");
+    assert.equal("summary" in JSON.parse(mock.calls[3].init.body), false);
   } finally { mock.restore(); }
 });
 

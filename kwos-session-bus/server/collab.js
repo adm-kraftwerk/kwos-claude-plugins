@@ -99,6 +99,31 @@ export async function collabDetail(collabId) {
 }
 
 /**
+ * The relay's ceiling for a line's short form (relay/lib.js::COLLAB_SUMMARY_MAX). One number for
+ * both sides: the relay refuses anything longer, so the client must not be able to produce it.
+ */
+export const SUMMARY_MAX = 280;
+
+/**
+ * The short form as the relay will accept it: ONE line, at most SUMMARY_MAX characters, or null.
+ *
+ * It is clamped HERE and not at the relay, because the relay's 400 is the wrong trade: the brief is
+ * a courtesy for the readers, and a model that writes two sentences (or one long one) must lose the
+ * summary, never the message it belongs to. Whitespace -- newlines included -- folds to single
+ * spaces; an overlong sentence is cut at a word boundary and ends on an ellipsis, so the reader can
+ * see that something was cut.
+ */
+export function clampSummary(value, max = SUMMARY_MAX) {
+  if (typeof value !== "string") return null;
+  const line = value.replace(/\s+/g, " ").trim();
+  if (line === "") return null;
+  if (line.length <= max) return line;
+  const cut = line.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+/**
  * POST /v1/collabs/{id}/messages -- this session speaks.
  *
  * The KIND is what the other side reads. "claude" is the agent's own sentence, "human" is the
@@ -109,9 +134,10 @@ export async function collabDetail(collabId) {
  * The SHORT FORM (WI 11538037) rides along when the caller wrote one: the surfaces fold a long line
  * down to it and keep the text behind a disclose, so a pasted diff no longer pushes the rest of the
  * channel off the screen. It is a courtesy, not a condition -- a line without one still arrives, and
- * the surfaces then take its first sentence. An older relay ignores the field.
+ * the surfaces then take its first sentence. An older relay ignores the field entirely.
  */
 export async function sendCollabMessage(collabId, text, attachmentId = null, fromHuman = false, summary = null) {
+  const brief = clampSummary(summary);
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages`, {
     method: "POST",
     body: {
@@ -119,7 +145,7 @@ export async function sendCollabMessage(collabId, text, attachmentId = null, fro
       author_kind: fromHuman ? "human" : "claude",
       session_id: config.sessionId,
       ...(attachmentId ? { attachment_id: attachmentId } : {}),
-      ...(typeof summary === "string" && summary.trim() !== "" ? { summary: summary.trim() } : {}),
+      ...(brief !== null ? { summary: brief } : {}),
     },
   });
   // A line we relayed as the human comes back to us looking exactly like the human's own (s.

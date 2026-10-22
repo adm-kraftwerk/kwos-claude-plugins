@@ -15977,7 +15977,18 @@ async function collabDetail(collabId) {
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}`);
   return data;
 }
+var SUMMARY_MAX = 280;
+function clampSummary(value, max = SUMMARY_MAX) {
+  if (typeof value !== "string") return null;
+  const line = value.replace(/\s+/g, " ").trim();
+  if (line === "") return null;
+  if (line.length <= max) return line;
+  const cut = line.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}\u2026`;
+}
 async function sendCollabMessage(collabId, text2, attachmentId = null, fromHuman = false, summary = null) {
+  const brief = clampSummary(summary);
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages`, {
     method: "POST",
     body: {
@@ -15985,7 +15996,7 @@ async function sendCollabMessage(collabId, text2, attachmentId = null, fromHuman
       author_kind: fromHuman ? "human" : "claude",
       session_id: config2.sessionId,
       ...attachmentId ? { attachment_id: attachmentId } : {},
-      ...typeof summary === "string" && summary.trim() !== "" ? { summary: summary.trim() } : {}
+      ...brief !== null ? { summary: brief } : {}
     }
   });
   if (fromHuman) rememberOwnHumanLine(data?.message?.seq);
