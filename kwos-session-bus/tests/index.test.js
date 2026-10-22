@@ -210,6 +210,16 @@ test("collab_accept ohne Ziel nennt den Grund, statt ins Leere zu greifen", asyn
   }
 });
 
+test("collab_send bietet die Kurzform an -- und verlangt sie nicht (WI 11538037)", () => {
+  const tool = TOOLS.find((t) => t.name === "collab_send");
+  assert.ok(tool, "collab_send fehlt in TOOLS");
+  assert.equal(tool.inputSchema.properties.summary.type, "string");
+  // Eine Pflicht waere ein Bruch: eine kurze Nachricht braucht keine Kurzform, und ein Agent, der
+  // sie vergisst, soll nicht am Schema scheitern -- der Kanal leitet sie dann aus dem Text ab.
+  assert.deepEqual(tool.inputSchema.required, ["text"]);
+  assert.match(tool.inputSchema.properties.summary.description, /280/);
+});
+
 test("collab_send schreibt ohne from_human als 'claude' und mit ihm als 'human'", async () => {
   // Der Pausen-Zaehler zaehlt Agenten-Nachrichten in Folge. Wer die Worte seines Nutzers wortgleich
   // weitergibt, ist der MENSCH, der spricht -- `from_human` sagt das dem Relay. Der Test geht an
