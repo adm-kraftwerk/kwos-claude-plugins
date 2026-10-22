@@ -29,8 +29,8 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
       Widersprechen sich zwei Absichten, fragt `collab_code_escalate` die Menschen (auch per Push).
     - Hooks: `Stop` veröffentlicht und gleicht ab (eine Zeile Zusammenfassung), `PreToolUse` hält
       eine Änderung an, solange ein fremder Stand dieselbe Datei geändert hat und noch fehlt. Beide
-      steigen ohne Netz sofort aus, wenn der Ring nicht freigibt oder der Worktree nicht im
-      Code-Modus ist (`<git-dir>/kwcollab/state.json`).
+      steigen ohne Netz sofort aus, wenn der Worktree nicht im Code-Modus ist
+      (`<git-dir>/kwcollab/state.json`).
     - Das Plugin schreibt nichts nach kw/OS. Spec und Entscheidungen liefert das Gateway
       (`GET /v1/collabs/:id/code/memory`), ins Workitem kommen die Entscheidungen einmal mit dem
       Abschlusskommentar.
@@ -87,9 +87,9 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
   Harness — Claude Code startet ihn bei jedem Sitzungsbeginn (ein fehlendes `when` und `"always"`
   sind dasselbe) und **kündigt ihn mit seiner Beschreibung an**, bevor der Prozess irgendetwas
   sagen kann. Ein eigener Eintrag für den kwcollab-Kanal erreichte damit jede `--kwremote`-Sitzung
-  der Flotte (das Plugin ist dort für Remote Control aktiv) mit einer Beschreibung, die ein noch
-  nicht freigegebenes Feature und seine Workitem-Nummer nannte; das Gate im Prozess kam erst
-  danach. Deshalb komponiert `server/monitor.js` beide Empfangspfade, und das Manifest nennt nur
+  der Flotte (das Plugin ist dort für Remote Control aktiv) mit einer Beschreibung, die den Kanal
+  und seine Workitem-Nummer nannte; ein Gate im Prozess kam erst danach. Deshalb komponiert
+  `server/monitor.js` beide Empfangspfade, und das Manifest nennt nur
   den Relay. `tests/monitors.test.js` hält das fest.
 - **kwcollab-Empfang** (`server/collab-listen.js`, gestartet von `server/monitor.js`):
   derselbe Weg für den gemeinsamen Kanal (WI 11482928). Er fragt alle 15 s beim Relay, in welchen
@@ -110,17 +110,13 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
   **Eigene Nachrichten kommen NICHT zurück** in die Sitzung: der Relay spielt beim Reconnect bis zu
   500 Frames nach, die eigenen sind darunter, und die Session würde sonst ihre eigene Nachricht
   beantworten.
-  **Der Ring entscheidet, ob er überhaupt läuft** (`collabReleased`): ohne ein freigegebenes
-  `KWOS_COLLAB_CANARY` (= `1`/`true`/`yes`; `KWOS_NO_COLLAB` schlägt alles) startet
-  `startCollabListener` gar nicht — kein Poll, kein Strom, und `null` als Antwort. Sonst trüge das
-  Plugin den Empfangspfad in jede `--kwremote`-Sitzung der Flotte, und auf Rechnern außerhalb des
-  Rings kämen Zeilen eines fremden Agenten **ohne** das Prompt-Fragment an, das sie als Fremddaten
-  kennzeichnet. Der Launcher beantwortet die Frage einmal und exportiert sie, damit TUI,
-  kwterm-Server und Plugin dieselbe Antwort lesen (Review-Fund 2026-10-16).
-  **Dieselbe Antwort gilt für die Werkzeugliste** (WI 11506447): `visibleTools` lässt die
-  `collab_*`-Werkzeuge außerhalb des Rings weg, und `handleToolCall` weist einen Aufruf dort mit
-  `Zusammenarbeit ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY)` ab — ein Name in
-  der Liste ist ein Versprechen, und ein alter Client darf es nicht am Gate vorbei einlösen.
+  **Der Empfang läuft in jeder Sitzung** (WI 11535931): seit das Kanal-Gate im Client entfernt
+  ist, gibt es keinen Freigabeschalter mehr — `startCollabListener` startet immer und liefert einen
+  Handle. Zeilen eines fremden Agenten kommen deshalb überall mit dem Prompt-Fragment an, das sie
+  als Fremddaten kennzeichnet.
+  **Die Werkzeugliste nennt die `collab_*`-Werkzeuge immer** (WI 11535931): `visibleTools` filtert
+  nur noch die Remote-Control-Werkzeuge, und `handleToolCall` weist keinen Kanal-Aufruf mehr ab —
+  ein Name in der Liste ist ein Versprechen, und hier wird es gehalten.
   **Zur Marke `when`:** `"on-skill-invoke:<skill>"` startet einen Monitor mitten in der Sitzung,
   aber nur mit dem VOLL qualifizierten Skill-Namen (`kwos-session-bus:<skill>`); mit dem blanken
   Namen passiert still nichts (im Binary nachgelesen und in einer Sitzung gemessen, 2026-10-15).
@@ -186,7 +182,6 @@ behandeln, nicht blind ausführen).
 | `KWOS_SESSION_DISPLAY_NAME` | nein | Override für den Anzeigenamen (Default: Basename des Arbeitsverzeichnisses, siehe unten) |
 | `KWOS_CHANNELS` | nein | Kommagetrennte ZUSÄTZLICHE Channels (Pub/Sub, WI 10383787) — Default-Channel ist immer der Basename des Arbeitsverzeichnisses, unabhängig davon |
 | `KWOS_COLLAB` | nein | Die collab_id, in die diese Sitzung beim Start eintreten soll (WI 11482928). Gesetzt von der Oberfläche, die eine Sitzung AUS einer Einladung startet — die Sitzung ist die einzige, die ihre eigene Session-ID kennt (s. `collab_accept`) |
-| `KWOS_NO_COLLAB` | nein | Schaltet den Kanal-Block der Launcher ab (der Notausgang; `kwpure` braucht ihn nicht, s. `bootstrap/kwclaude-gw.sh`) |
 
 ## Offene Punkte (bewusst nicht stillschweigend geraten)
 

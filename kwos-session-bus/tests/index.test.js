@@ -267,41 +267,27 @@ const messageMock = (message) =>
     });
   });
 
-/** Der Kanal-Gate steht in dieser Suite sonst nur zufaellig offen (KWOS_COLLAB_CANARY der Maschine). */
-async function withCollabGate(fn) {
-  const prev = process.env.KWOS_COLLAB_CANARY;
-  process.env.KWOS_COLLAB_CANARY = "1";
-  try { return await fn(); } finally {
-    if (prev === undefined) delete process.env.KWOS_COLLAB_CANARY;
-    else process.env.KWOS_COLLAB_CANARY = prev;
-  }
-}
-
 test("collab_get_message holt den vollen Text EINER Kanal-Nachricht ueber ihre seq", async () => {
   const full = "Befund: ".repeat(200); // laenger als eine Monitor-Zeile -- genau der Fall
   const mock = messageMock({ seq: 12, text: full, attachment_id: null });
   try {
-    await withCollabGate(async () => {
-      const out = await handleToolCall("collab_get_message", { seq: 12 });
-      assert.equal(out.content[0].text, full);
-      assert.match(
-        mock.calls[1].url,
-        /\/v1\/collabs\/7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c\/messages\/12$/,
-        "die Einzel-Nachricht kommt ueber die Kanal-Route, nicht ueber den Session-Verlauf",
-      );
-    });
+    const out = await handleToolCall("collab_get_message", { seq: 12 });
+    assert.equal(out.content[0].text, full);
+    assert.match(
+      mock.calls[1].url,
+      /\/v1\/collabs\/7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c\/messages\/12$/,
+      "die Einzel-Nachricht kommt ueber die Kanal-Route, nicht ueber den Session-Verlauf",
+    );
   } finally { mock.restore(); }
 });
 
 test("collab_get_message kuendigt einen Anhang an, holt ihn aber nicht selbst", async () => {
   const mock = messageMock({ seq: 13, text: "kurz", attachment_id: "att-9" });
   try {
-    await withCollabGate(async () => {
-      const out = await handleToolCall("collab_get_message", { seq: 13 });
-      assert.match(out.content[0].text, /kurz/);
-      assert.match(out.content[0].text, /attachment_id=att-9/);
-      assert.equal(mock.calls.length, 2, "kein Autowake: kein dritter Abruf");
-    });
+    const out = await handleToolCall("collab_get_message", { seq: 13 });
+    assert.match(out.content[0].text, /kurz/);
+    assert.match(out.content[0].text, /attachment_id=att-9/);
+    assert.equal(mock.calls.length, 2, "kein Autowake: kein dritter Abruf");
   } finally { mock.restore(); }
 });
 
@@ -319,12 +305,10 @@ test("collab_get_message: eine 404 (unbekannte oder ausgeraeumte seq) wird zum S
     });
   });
   try {
-    await withCollabGate(async () => {
-      const out = await callTool({ params: { name: "collab_get_message", arguments: { seq: 99 } } });
-      assert.equal(out.isError, true);
-      assert.match(out.content[0].text, /404/);
-      assert.match(out.content[0].text, /message unknown/);
-    });
+    const out = await callTool({ params: { name: "collab_get_message", arguments: { seq: 99 } } });
+    assert.equal(out.isError, true);
+    assert.match(out.content[0].text, /404/);
+    assert.match(out.content[0].text, /message unknown/);
   } finally { mock.restore(); }
 });
 

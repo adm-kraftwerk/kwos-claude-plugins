@@ -268,7 +268,7 @@ try {
   const sessionEnv = (who, cwd) => ({
     ...process.env,
     KWOS_RELAY_URL: RELAY, KWOS_XID_ACCESS_TOKEN: `tok-${who}`, CLAUDE_CODE_SESSION_ID: sessions[who],
-    KWOS_COLLAB_CANARY: "1", KWOS_CLIENT_ID: "", PWD: cwd,
+    KWOS_CLIENT_ID: "", PWD: cwd,
   });
   const runNode = (who, cwd, args, input = "") => new Promise((resolve) => {
     const p = spawn(process.execPath, args, { cwd, env: sessionEnv(who, cwd), stdio: ["pipe", "pipe", "pipe"] });

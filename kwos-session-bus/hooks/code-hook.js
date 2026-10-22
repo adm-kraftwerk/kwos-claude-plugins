@@ -6,8 +6,7 @@
 //                            another member's state changes the file and is not here yet
 //
 // RUNS IN EVERY SESSION WITH THIS PLUGIN, so the first thing it does is decide -- WITHOUT the
-// network -- whether there is anything to do: the channel must be released on this machine
-// (KWOS_COLLAB_CANARY, the same gate as the tools) and this worktree must have joined code mode
+// network -- whether there is anything to do: this worktree must have joined code mode
 // (its git dir holds kwcollab/state.json). Everywhere else it exits 0 at once, silently.
 //
 // NEVER BLOCKS THE SESSION ON ITS OWN FAILURE. A broken relay or a git error turns into a
@@ -23,7 +22,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { collabReleased } from "../server/collab-listen.js";
 import { sessionCwd } from "../server/config.js";
 
 const mode = process.argv[2];
@@ -49,7 +47,6 @@ const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 async function main() {
   const raw = await readStdin();
-  if (!collabReleased()) return;
   let payload = {};
   try { payload = JSON.parse(raw || "{}"); } catch { return; }
   // The payload carries the session's directory. Without it, use the one config could still read:

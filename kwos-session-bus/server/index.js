@@ -6,13 +6,7 @@ import { config, ensureSessionId, refreshSessionId } from "./config.js";
 import { log } from "./log.js";
 import * as relay from "./relay-client.js";
 import * as collab from "./collab.js";
-// The channel's release question has ONE answer in this plugin, and it is read where the receive
-// path reads it (collab-listen.js, `collabReleased`): the launcher exports it, so the tools and the
-// monitor cannot disagree about it.
-import { collabReleased } from "./collab-listen.js";
 import { CODE_TOOLS, CODE_TOOL_NAMES, handleCodeTool } from "./codeTools.js";
-
-const COLLAB_TOOL_PREFIX = "collab_";
 
 export const TOOLS = [
   {
@@ -312,27 +306,26 @@ export const TOOLS = [
       additionalProperties: false,
     },
   },
-  // Code exchange (WI 11517979): own file, same `collab_` gate.
+  // Code exchange (WI 11517979): own file.
   ...CODE_TOOLS,
 ];
 
 // The version the MCP client sees in the handshake. It names the SAME artifact as plugin.json /
 // marketplace.json, so it moves with them -- it had been left at 0.5.0 through the 0.5.1 bump.
 const server = new Server(
-  { name: "kwos-session-bus", version: "0.5.2" },
+  { name: "kwos-session-bus", version: "0.6.0" },
   { capabilities: { tools: {} } }
 );
 
 /**
  * Die Werkzeuge, die NUR eine Remote-Control-Sitzung angeboten bekommt (2026-10-19, Befund Luca).
  *
- * WARUM: seit dem Kanal-Gate schaltet der Launcher dieses Plugin in JEDER freigegebenen Sitzung
- * zu -- also auch ohne `--kwremote`. `ask_remote` fragt den Menschen per Push und BLOCKIERT bis zu
+ * WARUM: der Launcher schaltet dieses Plugin in JEDER Sitzung zu -- also auch ohne `--kwremote`.
+ * `ask_remote` fragt den Menschen per Push und BLOCKIERT bis zu
  * ~9,5 Minuten. In einer Sitzung am Terminal wartet niemand, und die PWA ist gar nicht offen: die
  * Rueckfrage lief ins Leere, jedes Mal. Ohne diesen Filter stand das Werkzeug dort nur mit seiner
  * Beschreibung da ("fuer Momente, in denen niemand am Terminal sitzt") -- und die laedt genau dazu
- * ein. Ein Name in der Werkzeugliste ist ein Versprechen (dieselbe Regel wie bei den Kanal-
- * Werkzeugen oben).
+ * ein. Ein Name in der Werkzeugliste ist ein Versprechen.
  */
 export const REMOTE_ONLY_TOOLS = new Set(["ask_remote"]);
 
@@ -352,19 +345,15 @@ export function remoteActive(env = process.env) {
 }
 
 /**
- * The tools a session is OFFERED -- everything except the channel's own, where the ring has not
- * released it, and except the Remote-Control tools, where this session is not one.
+ * The tools a session is OFFERED -- everything except the Remote-Control tools, where this session
+ * is not one.
  *
- * A filter and not merely a refusal (2026-10-19, WI 11506447): the tool list is the session's
- * picture of what this plugin can do, and `collab_status`, `collab_send`, `collab_accept`,
- * `collab_leases`, `collab_lease`, `collab_release` and `collab_get_attachment` stood in it
- * wherever the plugin was enabled -- i.e. in every `--kwremote` session of the fleet, for a channel
- * the interfaces hide there. A name in the tool list is a promise, and this one was not kept. Same
- * rule as the monitor entry (s. collab-listen.js's header): what is not released is not announced.
+ * The channel's tools are always in the list: since the client's canary gate was removed
+ * (WI 11535931) every session offers the channel, so there is no release switch to hide them
+ * behind. A name in the tool list is a promise, and here it is kept.
  */
 export function visibleTools(env = process.env) {
   let tools = TOOLS;
-  if (!collabReleased(env)) tools = tools.filter((t) => !t.name.startsWith(COLLAB_TOOL_PREFIX));
   if (!remoteActive(env)) tools = tools.filter((t) => !REMOTE_ONLY_TOOLS.has(t.name));
   return tools;
 }
@@ -377,13 +366,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: visibleTo
 // das macht callTool() unten, damit ein Test hier den ECHTEN Fehler sieht (Message/Typ),
 // nicht nur eine bereits zu Text geschrumpfte Fehlermeldung.
 export async function handleToolCall(name, args = {}) {
-  // The same gate as `visibleTools`, on the DOING side: a session that kept an old tool list (or
-  // names the tool from its own memory) must not reach the relay either. The wording is kwterm's
-  // own for this state (`Zusammenarbeit ist auf diesem Rechner nicht freigegeben`), so a reader
-  // cannot tell which of the two surfaces answered.
-  if (name.startsWith(COLLAB_TOOL_PREFIX) && !collabReleased()) {
-    throw new Error("Zusammenarbeit ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY).");
-  }
   // The same rule on the DOING side (Befund Luca 2026-10-19): a session that kept an old tool list
   // -- or names the tool from what it read somewhere -- must not spend 9,5 minutes asking a phone
   // nobody is looking at. The refusal names the way out, so the model can act on it.
@@ -604,16 +586,13 @@ async function main() {
   // registration above -- the relay's accept checks that the session belongs to the caller, and
   // that check reads exactly this registry row.
   //
-  // Behind the SAME gate as the tools and the receive path (2026-10-19, WI 11506447): an invitation
-  // can only come from an interface that shows the channel, so outside the ring this variable is
-  // either stale (a hand-set environment, an older launcher) or somebody testing -- and a session
-  // that silently joins a channel it was never offered would then receive lines from other people's
-  // agents without the prompt fragment that marks them as foreign data.
+  // No release switch (WI 11535931): every session offers the channel, so an invitation names a
+  // channel this session could have been given from the start.
   //
   // A failure here must not cost the session: the channel is an addition, and the human can join
   // again from an interface. It is reported, not swallowed -- a silent failure would leave somebody
   // waiting in a channel that this session never entered.
-  if (config.collab && collabReleased()) {
+  if (config.collab) {
     try {
       await collab.acceptCollab(config.collab);
       log.info("Collab-Kanal beigetreten.", { collabId: config.collab });

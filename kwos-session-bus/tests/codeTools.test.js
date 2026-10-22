@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 process.env.KWOS_XID_ACCESS_TOKEN = "test-token";
-const { visibleTools, handleToolCall } = await import("../server/index.js");
+const { visibleTools } = await import("../server/index.js");
 const { CODE_TOOLS } = await import("../server/codeTools.js");
 const { frameToLine } = await import("../server/collab-listen.js");
 const { editBlocker } = await import("../server/codeRuntime.js");
@@ -17,18 +17,12 @@ const { summaryLine } = await import("../server/codeExchange.js");
 
 const HOOK = fileURLToPath(new URL("../hooks/code-hook.js", import.meta.url));
 
-test("die Code-Werkzeuge stehen hinter derselben Kanal-Freigabe wie die anderen collab_-Werkzeuge", async () => {
+test("die Code-Werkzeuge stehen ohne jeden Schalter in der Werkzeugliste", async () => {
   const names = CODE_TOOLS.map((t) => t.name);
   assert.ok(names.every((n) => n.startsWith("collab_code_")));
-  const off = visibleTools({}).map((t) => t.name);
-  assert.ok(names.every((n) => !off.includes(n)), "ausserhalb des Rings nicht angeboten");
-  const on = visibleTools({ KWOS_COLLAB_CANARY: "1" }).map((t) => t.name);
-  assert.ok(names.every((n) => on.includes(n)), "im Ring angeboten");
-  const prev = process.env.KWOS_COLLAB_CANARY;
-  delete process.env.KWOS_COLLAB_CANARY;
-  try {
-    await assert.rejects(() => handleToolCall("collab_code_sync", {}), /nicht freigegeben/);
-  } finally { if (prev !== undefined) process.env.KWOS_COLLAB_CANARY = prev; }
+  // Kein Environment und kein Kanal-Gate mehr (WI 11535931): die Werkzeuge sind immer da.
+  const shown = visibleTools({}).map((t) => t.name);
+  assert.ok(names.every((n) => shown.includes(n)), "ohne Schalter angeboten");
 });
 
 test("jede Code-Werkzeugbeschreibung hat ein geschlossenes Schema", () => {
@@ -121,27 +115,24 @@ test("das Plugin schreibt nichts ins Workitem", async () => {
   }
 });
 
-test("der Hook tut ausserhalb des Rings und ausserhalb des Code-Modus nichts -- ohne Netz, ohne Ausgabe", () => {
+test("der Hook tut ausserhalb des Code-Modus nichts -- ohne Netz, ohne Ausgabe", () => {
   const dir = mkdtempSync(join(tmpdir(), "kwcode-hook-"));
   try {
-    const run = (env, payload) => spawnSync(process.execPath, [HOOK, "stop"], {
+    const run = (payload) => spawnSync(process.execPath, [HOOK, "stop"], {
       input: JSON.stringify(payload), encoding: "utf8",
       // A relay URL nobody listens on: any network attempt would hang or fail loudly.
-      env: { ...process.env, KWOS_RELAY_URL: "http://127.0.0.1:9", ...env },
+      env: { ...process.env, KWOS_RELAY_URL: "http://127.0.0.1:9" },
       timeout: 15000,
     });
-    const offRing = run({ KWOS_COLLAB_CANARY: "0" }, { cwd: dir, hook_event_name: "Stop" });
-    assert.equal(offRing.status, 0);
-    assert.equal(offRing.stdout, "");
-    const noRepo = run({ KWOS_COLLAB_CANARY: "1" }, { cwd: dir, hook_event_name: "Stop" });
+    const noRepo = run({ cwd: dir, hook_event_name: "Stop" });
     assert.equal(noRepo.status, 0);
     assert.equal(noRepo.stdout, "");
     spawnSync("git", ["init", "-q"], { cwd: dir });
-    const notJoined = run({ KWOS_COLLAB_CANARY: "1" }, { cwd: dir, hook_event_name: "Stop" });
+    const notJoined = run({ cwd: dir, hook_event_name: "Stop" });
     assert.equal(notJoined.status, 0);
     assert.equal(notJoined.stdout, "");
     const pre = spawnSync(process.execPath, [HOOK, "pretooluse"], {
-      input: "not json", encoding: "utf8", env: { ...process.env, KWOS_COLLAB_CANARY: "1" }, timeout: 15000,
+      input: "not json", encoding: "utf8", env: { ...process.env }, timeout: 15000,
     });
     assert.equal(pre.status, 0);
     assert.equal(pre.stdout, "");

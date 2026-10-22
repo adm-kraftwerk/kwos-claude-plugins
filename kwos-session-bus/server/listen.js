@@ -182,10 +182,10 @@ export function formatLine(rawData) {
 }
 
 // The relay receive path as a startable function: the ONE monitor process (server/monitor.js) runs
-// this, and -- where the ring released the channel -- the kwcollab receive path next to it. It
-// stood here as a `main()` of its own until 2026-10-19; the reason for the split is the fleet leak
-// in collab-listen.js's header (WI 11506447): a monitor cannot be started mid-session, so the one
-// process that exists in every session has to be the one that carries both paths.
+// this, and the kwcollab receive path next to it. It stood here as a `main()` of its own until
+// 2026-10-19; the reason for the split is the fleet leak in collab-listen.js's header (WI 11506447):
+// a monitor cannot be started mid-session, so the one process that exists in every session has to
+// be the one that carries both paths.
 //
 // `writeLine` is the caller's: both paths write to the same stdout, and two writers would each keep
 // their own spacing (s. createLineWriter) -- which is what the spacing is there to prevent.

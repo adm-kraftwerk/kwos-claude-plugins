@@ -13,13 +13,11 @@
 // WHY IT IS NO LONGER ITS OWN ENTRY IN monitors/monitors.json (2026-10-19, WI 11506447): a monitor
 // entry is a PROMISE the harness makes to the session -- Claude Code starts it at session start (a
 // missing `when` and `"always"` mean the same thing) and announces it by its DESCRIPTION, before
-// the process gets any chance to say no. The gate below therefore came too late: this plugin is
-// enabled in every `--kwremote` session (a fleet feature, s. bootstrap/kwclaude-gw.sh in the
-// litellm repo), so the description naming kwcollab and its workitem was announced in every such
-// session of the fleet, and the monitor exited a moment later. The fleet saw an unreleased
-// feature's name and the model reacted to that line. Where the channel is not released, nothing
-// about it may be announced: this path rides along in the listener those sessions already have,
-// and `collabReleased` decides whether it is started at all.
+// the process gets any chance to say no. A second entry for the channel therefore reached every
+// `--kwremote` session of the fleet under a description that named the channel and its workitem.
+// This path rides along in the listener those sessions already have, so the ONE manifest entry
+// names only the relay. Since the client's canary gate was removed (WI 11535931), the channel is
+// offered to every session: there is no release switch, and this path is always composed.
 //
 // One OR MORE lines per message on stdout (a message longer than one monitor line arrives as its
 // numbered parts, WI 11536314), diagnostics on stderr (the convention of this plugin, s. listen.js).
@@ -64,35 +62,6 @@ import { codeServing as defaultCodeServing } from "./codeMonitor.js";
  * every session of the fleet (review finding 2026-10-16).
  */
 export const COLLAB_POLL_MS = readCheckInterval(process.env.KWOS_COLLAB_POLL_MS, 15_000);
-
-/**
- * Is the channel released on THIS machine? The launcher answers that question once and exports the
- * answer as `KWOS_COLLAB_CANARY` ("explicit switch > remembered ring > OFF" --
- * bootstrap/kwclaude-gw.sh), so kwterm's server, the TUI and this monitor read the SAME answer
- * instead of three guesses.
- *
- * WHY THE MONITOR ASKS AT ALL (review finding 2026-10-16): without this the plugin would carry the
- * receive path of the channel into EVERY `--kwremote` session of the fleet -- the monitor would
- * poll `GET /v1/collabs` every 15 s for a channel that no interface offers and no human asked for.
- * Worse, the prompt fragment that marks `[kwcollab …]` lines as FOREIGN DATA is appended by the
- * launcher under the same switch -- so outside the ring, lines from another person's agent would
- * arrive WITHOUT the framing that tells the session to treat them as data. The ring decides the
- * channel; it has to decide its receive path too.
- *
- * Anything else counts as OFF, including unset: the launcher in the field today does not export
- * the variable yet, and a feature that switches itself on is not a release.
- *
- * The spellings are the launcher's own (bootstrap/kwclaude-gw.sh, `kwos_collab_released`): `1`,
- * `true` or `yes`, case-insensitive and whitespace-stripped, and `KWOS_NO_COLLAB` beats everything
- * (tested as "non-empty", the way `[ -n … ]` does it). The launcher normalises what it exports to
- * `1`/`0`, so this is the same answer by the same rule -- a hand-set value just behaves like a
- * launcher answer instead of needing one.
- */
-export function collabReleased(env = process.env) {
-  if (String(env?.KWOS_NO_COLLAB ?? "") !== "") return false;
-  const v = String(env?.KWOS_COLLAB_CANARY ?? "").trim().toLowerCase();
-  return v === "1" || v === "true" || v === "yes";
-}
 
 /**
  * Is stdin a CHANNEL that the session really holds -- a pipe or a socket?
@@ -165,12 +134,10 @@ export function frameToLine(raw, { members = [], selfSessionId = null, collabId 
 }
 
 /**
- * Starts the channel receive path and returns a handle, or `null` where the ring has not released
- * the channel.
+ * Starts the channel receive path and returns a handle.
  *
- * `null` is the answer the caller needs: it means "there is nothing to stop and nothing that could
- * have been announced" -- on a machine outside the ring this function must not touch the relay at
- * all (no poll, no stream, no line).
+ * There is no release switch: since the client's canary gate was removed (WI 11535931) the channel
+ * is offered to every session, so this path is always composed next to the relay path.
  *
  * The caller owns the writer: the process that starts this also writes the relay's own lines, and
  * two writers on one stdout would each keep their own spacing (the spacing exists because Claude
@@ -183,14 +150,7 @@ export function frameToLine(raw, { members = [], selfSessionId = null, collabId 
  * hands this process `/dev/null` (s. the stdin block below), and a test cannot make its OWN stdin
  * the null device. A double that emits `end` the moment it is resumed is what `/dev/null` does.
  */
-export async function startCollabListener({ writeLine, env = process.env, stdin = process.stdin, isChannel = stdinIsChannel, codeServing = defaultCodeServing } = {}) {
-  // The ring decides (s. collabReleased): outside it this receive path does not run at all -- no
-  // poll, no stream, no line. Logged once, because "the channel is silent" and "the channel was
-  // never switched on here" look identical from inside a session.
-  if (!collabReleased(env)) {
-    log.info("kwcollab ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY) -- kein Empfang.");
-    return null;
-  }
+export async function startCollabListener({ writeLine, stdin = process.stdin, isChannel = stdinIsChannel, codeServing = defaultCodeServing } = {}) {
   await ensureSessionId();
 
   let stopping = false;
@@ -424,8 +384,6 @@ export async function startCollabListener({ writeLine, env = process.env, stdin 
 async function main() {
   const writeLine = createLineWriter(process.stdout);
   const listener = await startCollabListener({ writeLine });
-  // Outside the ring: nothing was started, nothing to wait for, nothing to flush.
-  if (!listener) return;
   await listener.ended;
   await writeLine.flush();
 }
