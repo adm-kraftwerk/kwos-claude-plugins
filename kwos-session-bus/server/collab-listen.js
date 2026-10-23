@@ -34,9 +34,9 @@
 // `author_kind` in the filter below, a person cannot reach their own session through its channel at
 // all -- measured 2026-10-19 (tgoebel), the one way the channel is actually used.
 
-import { fileURLToPath } from "node:url";
 import { fstatSync } from "node:fs";
 import { config, ensureSessionId, refreshSessionId, readCheckInterval, sessionCwd } from "./config.js";
+import { isMainModule } from "./is-main.js";
 import { log } from "./log.js";
 import { runSseReceiver } from "./sse-receiver.js";
 import { readCursor, rememberCursor } from "./collabCursor.js";
@@ -389,8 +389,9 @@ async function main() {
 }
 
 // Guard as in index.js/listen.js: an `import` from a test must not open a real SSE connection.
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-if (isMain) {
+// Both paths are resolved first -- a symlinked plugin directory used to make this false and let the
+// process exit 0 in silence (WI 11550391). See server/is-main.js.
+if (isMainModule(import.meta.url)) {
   main().catch((err) => {
     log.error("Unerwarteter Fehler im Collab-Listener.", { error: String(err) });
     process.exit(1);
