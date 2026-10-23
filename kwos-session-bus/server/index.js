@@ -313,7 +313,7 @@ export const TOOLS = [
 // The version the MCP client sees in the handshake. It names the SAME artifact as plugin.json /
 // marketplace.json, so it moves with them -- it had been left at 0.5.0 through the 0.5.1 bump.
 const server = new Server(
-  { name: "kwos-session-bus", version: "0.6.1" },
+  { name: "kwos-session-bus", version: "0.6.2" },
   { capabilities: { tools: {} } }
 );
 
