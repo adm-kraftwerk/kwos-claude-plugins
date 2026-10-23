@@ -98,6 +98,42 @@ function seqOf(raw) {
   }
 }
 
+/**
+ * The relay's join line, exactly as `relay/server.js` writes it on a first accept: `<login> joined`.
+ * Anchored on both ends so "<name> joined code mode" (the code-exchange line) is not taken for it.
+ */
+const JOINED_LINE = /^(\S+) joined$/;
+
+/**
+ * The note the channel's LEAD session gets on a join line (WI 11548469).
+ *
+ * The relay's line names the newcomer and nothing else, and every session in the channel receives the
+ * same words -- so none of them could tell from the line alone whose job the briefing is. The monitor
+ * knows (the member list carries each session's role), and it marks the line in exactly one session:
+ * the maintainer's. What to do with the mark is the prompt fragment's rule, not this file's.
+ */
+export const LEAD_JOIN_NOTE = "(du leitest diesen Kanal)";
+
+/** This session's own member row in a channel, or null when the list does not name it. */
+function ownMember(members, selfSessionId) {
+  if (!selfSessionId) return null;
+  return members.find((m) => m && m.session_id === selfSessionId && m.status === "joined") ?? null;
+}
+
+/**
+ * The text of a system line as this session should read it: the relay's own words, plus the lead
+ * note when this session leads the channel and somebody ELSE joined it. A maintainer's second window
+ * joining is not a newcomer, and nobody briefs themselves.
+ */
+function systemText(text, members, selfSessionId) {
+  const hit = typeof text === "string" ? JOINED_LINE.exec(text.trim()) : null;
+  if (!hit) return text;
+  const me = ownMember(members, selfSessionId);
+  if (!me || me.role !== "maintainer") return text;
+  if (String(me.subject ?? "").toLowerCase() === hit[1].toLowerCase()) return text;
+  return `${text.trim()} ${LEAD_JOIN_NOTE}`;
+}
+
 export function frameToLine(raw, { members = [], selfSessionId = null, collabId = null, after = 0, wakeOnCode = true } = {}) {
   let msg;
   try { msg = JSON.parse(raw); } catch { return null; }
@@ -128,7 +164,7 @@ export function frameToLine(raw, { members = [], selfSessionId = null, collabId 
     seq: msg.seq,
     from: senderName(msg, members),
     kind: msg.author_kind,
-    text: msg.text,
+    text: msg.author_kind === "system" ? systemText(msg.text, members, selfSessionId) : msg.text,
     attachmentId: msg.attachment_id,
   });
 }

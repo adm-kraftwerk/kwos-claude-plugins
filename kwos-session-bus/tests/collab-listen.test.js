@@ -232,6 +232,40 @@ test("frameToLine: die selbst weitergereichte Zeile wird verschluckt, die des Me
   assert.ok(frameToLine(ownRelayed(7), seen), "die Nummer wurde fuer immer gesperrt");
 });
 
+// The relay's join line, and who gets the lead note on it (WI 11548469). Only the session that leads
+// the channel is told the briefing is its job; every other session reads the relay's words unchanged.
+const joinedFrame = (seq, text) =>
+  JSON.stringify({ seq, collab_id: COLLAB, from_subject: "relay", from_session: null, author_kind: "system", text });
+
+const LEAD = { subject: "k4sn9f", session_id: SESSION, role: "maintainer", status: "joined" };
+const PEER = { subject: "k4sn9f", session_id: SESSION, role: "member", status: "joined" };
+
+test("frameToLine: the lead session reads a join line with the lead note", async () => {
+  const { frameToLine, LEAD_JOIN_NOTE } = await import("../server/collab-listen.js");
+  const lines = frameToLine(joinedFrame(3, "00gaa93b joined"), { members: [LEAD], selfSessionId: SESSION, collabId: COLLAB });
+  assert.equal(lines.length, 1);
+  assert.ok(lines[0].endsWith(`00gaa93b joined ${LEAD_JOIN_NOTE}`), lines[0]);
+});
+
+test("frameToLine: a member that does not lead reads the join line unchanged", async () => {
+  const { frameToLine, LEAD_JOIN_NOTE } = await import("../server/collab-listen.js");
+  const lines = frameToLine(joinedFrame(3, "00gaa93b joined"), { members: [PEER], selfSessionId: SESSION, collabId: COLLAB });
+  assert.ok(lines[0].endsWith("00gaa93b joined"), lines[0]);
+  assert.ok(!lines[0].includes(LEAD_JOIN_NOTE));
+});
+
+test("frameToLine: the lead's own join and the code-mode line get no note", async () => {
+  const { frameToLine, LEAD_JOIN_NOTE } = await import("../server/collab-listen.js");
+  const seen = { members: [LEAD], selfSessionId: SESSION, collabId: COLLAB };
+  // The lead's own login joining (a second window) is not a newcomer to brief.
+  assert.ok(!frameToLine(joinedFrame(4, "K4SN9F joined"), seen)[0].includes(LEAD_JOIN_NOTE));
+  // "joined code mode" is the code exchange, not a new member of the channel.
+  assert.ok(!frameToLine(joinedFrame(5, "Mara joined code mode"), seen)[0].includes(LEAD_JOIN_NOTE));
+  // A message of a person that happens to read like the relay's line is not the relay's line.
+  const human = JSON.stringify({ seq: 6, collab_id: COLLAB, from_subject: "u-mara", author_kind: "human", text: "00gaa93b joined" });
+  assert.ok(!frameToLine(human, seen)[0].includes(LEAD_JOIN_NOTE));
+});
+
 test("stdin MIT Kanal: sein EOF beendet den Empfang weiterhin", async () => {
   const mock = installFetchMock((url, init) =>
     url.includes("/events") ? sseResponse(FRAME, init?.signal) : jsonResponse({ collabs: [collabRow()] }));
