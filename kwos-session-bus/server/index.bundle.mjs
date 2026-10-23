@@ -17260,7 +17260,7 @@ var TOOLS = [
   ...CODE_TOOLS
 ];
 var server = new Server(
-  { name: "kwos-session-bus", version: "0.6.1" },
+  { name: "kwos-session-bus", version: "0.6.2" },
   { capabilities: { tools: {} } }
 );
 var REMOTE_ONLY_TOOLS = /* @__PURE__ */ new Set(["ask_remote"]);
