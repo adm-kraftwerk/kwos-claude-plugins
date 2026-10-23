@@ -1,7 +1,6 @@
 // kwcollab code exchange (WI 11517979) -- the tools the agent sees.
 //
-// All names start with `collab_`, so the channel gate in index.js (visibleTools / handleToolCall)
-// covers them without a line of their own: outside the ring they are neither listed nor callable.
+// All names start with `collab_`, which is how a surface recognises them as the channel's tools.
 //
 // The descriptions are the agent's manual. They say WHEN to call a tool, what it does to the
 // worktree, and what NOT to do -- the rules of the protocol live there and in the collab prompt

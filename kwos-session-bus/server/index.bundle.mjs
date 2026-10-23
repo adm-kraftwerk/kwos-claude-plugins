@@ -6915,7 +6915,7 @@ var require_dist = __commonJS({
 });
 
 // server/index.js
-import { fileURLToPath as fileURLToPath3 } from "node:url";
+import { fileURLToPath } from "node:url";
 
 // node_modules/zod/v4/core/core.js
 var _a;
@@ -15818,9 +15818,6 @@ async function broadcast(text2, workitemRef) {
     body: { from: config2.sessionId, text: text2, workitem_ref: workitemRef }
   });
 }
-function eventsUrl() {
-  return `${config2.relayUrl}/v1/sessions/${encodeURIComponent(config2.sessionId)}/events`;
-}
 async function publishToChannel(channel, text2, workitemRef) {
   const { data } = await call(`/v1/channels/${encodeURIComponent(channel)}/publish`, {
     method: "POST",
@@ -15931,11 +15928,6 @@ function rememberOwnHumanLine(seq) {
   sent.add(n);
   while (sent.size > LIMIT) sent.delete(sent.values().next().value);
 }
-function takeOwnHumanLine(seq) {
-  const n = Number(seq);
-  if (!Number.isSafeInteger(n) || n <= 0) return false;
-  return sent.delete(n);
-}
 
 // server/collab.js
 async function listCollabs() {
@@ -16044,351 +16036,11 @@ async function acquireLease(collabId, { subjectId, subject, section, ttlSec, exc
 async function releaseLease(collabId, leaseId) {
   await call(`/v1/collabs/${encodeURIComponent(collabId)}/leases/${encodeURIComponent(leaseId)}`, { method: "DELETE" });
 }
-function collabEventsUrl(collabId) {
-  return `${config2.relayUrl}/v1/collabs/${encodeURIComponent(collabId)}/events`;
-}
-
-// server/collab-listen.js
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-import { fstatSync } from "node:fs";
-
-// server/sse-receiver.js
-import { Readable } from "node:stream";
-var RECONNECT_MIN_MS = 2e3;
-var RECONNECT_MAX_MS = 3e4;
-async function runSseReceiver(onMessage, { signal, url = null, since = null, onEventId = null, getToken = getAccessToken }) {
-  let lastEventId = since === null || since === void 0 ? void 0 : String(since);
-  let delay = RECONNECT_MIN_MS;
-  const endpoint = url || eventsUrl();
-  while (!signal.aborted) {
-    try {
-      const token = await getToken();
-      const res = await fetch(endpoint, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "text/event-stream",
-          ...lastEventId ? { "Last-Event-ID": lastEventId } : {}
-        },
-        signal
-      });
-      if (!res.ok || !res.body) {
-        throw new Error(`SSE-Verbindung fehlgeschlagen: ${res.status}`);
-      }
-      log.info("SSE verbunden.", { lastEventId });
-      delay = RECONNECT_MIN_MS;
-      let buffer = "";
-      for await (const chunk of Readable.fromWeb(res.body)) {
-        buffer += chunk.toString("utf8");
-        let idx;
-        while ((idx = buffer.indexOf("\n\n")) !== -1) {
-          const rawEvent = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 2);
-          const { id, data, event } = parseEvent(rawEvent);
-          if (id) {
-            lastEventId = id;
-            if (onEventId) onEventId(id);
-          }
-          if (data) onMessage(data, event);
-        }
-      }
-    } catch (err) {
-      if (signal.aborted) return;
-      log.error("SSE-Verbindung verloren, reconnect.", { error: String(err), delayMs: delay });
-    }
-    await sleep2(delay, signal);
-    delay = Math.min(delay * 2, RECONNECT_MAX_MS);
-  }
-}
-function parseEvent(rawEvent) {
-  let id;
-  let event;
-  const dataLines = [];
-  for (const line of rawEvent.split("\n")) {
-    if (line.startsWith("id:")) id = line.slice(3).trim();
-    else if (line.startsWith("event:")) event = line.slice(6).trim();
-    else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
-  }
-  return { id, event, data: dataLines.length ? dataLines.join("\n") : void 0 };
-}
-function sleep2(ms, signal) {
-  return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => {
-      clearTimeout(t);
-      resolve();
-    });
-  });
-}
-
-// server/collabCursor.js
-import { mkdirSync, readFileSync as readFileSync2, renameSync, writeFileSync } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { dirname as dirname2, join as join2 } from "node:path";
-var CURSOR_FILE = "collab-cursors.json";
-var MAX_CHANNELS = 40;
-function cursorsPath(env = process.env) {
-  const override = typeof env.KWOS_COLLAB_CURSORS === "string" ? env.KWOS_COLLAB_CURSORS.trim() : "";
-  if (override !== "") return override;
-  const cfg = typeof env.KWOS_CLAUDE_CFG === "string" ? env.KWOS_CLAUDE_CFG.trim() : "";
-  const base = cfg !== "" ? cfg : join2(env.HOME || homedir2(), ".config", "kraftwerk");
-  return join2(base, CURSOR_FILE);
-}
-function readCursor(collabId, path = cursorsPath()) {
-  const all = readAll(path);
-  const seq = Number(all[collabId]);
-  return Number.isFinite(seq) && seq > 0 ? seq : null;
-}
-function rememberCursor(collabId, seq, path = cursorsPath()) {
-  const n = Number(seq);
-  if (!Number.isFinite(n) || n <= 0) return;
-  const all = readAll(path);
-  if (Number(all[collabId]) >= n) return;
-  all[collabId] = n;
-  const keys = Object.keys(all);
-  for (const key of keys.slice(0, Math.max(0, keys.length - MAX_CHANNELS))) delete all[key];
-  try {
-    mkdirSync(dirname2(path), { recursive: true });
-    const tmp = `${path}.${process.pid}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(all, null, 2)}
-`);
-    renameSync(tmp, path);
-  } catch {
-  }
-}
-function readAll(path) {
-  try {
-    const parsed = JSON.parse(readFileSync2(path, "utf8"));
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-    const out = {};
-    for (const [key, value] of Object.entries(parsed)) {
-      const n = Number(value);
-      if (Number.isFinite(n) && n > 0) out[key] = n;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-
-// server/listen.js
-import { fileURLToPath } from "node:url";
-var MAX_LINE_CHARS = 480;
-var LINE_SPACING_MS = 250;
-var MAX_RETRY_MS = 5e3;
-var defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-function createLineWriter(stream, { spacingMs = LINE_SPACING_MS } = {}) {
-  const queue = [];
-  let running = null;
-  let active = false;
-  let lastWriteAt = null;
-  async function drain() {
-    active = true;
-    try {
-      while (queue.length) {
-        if (lastWriteAt !== null) {
-          const wait = spacingMs - (performance.now() - lastWriteAt);
-          if (wait > 0) await defaultSleep(wait);
-        }
-        stream.write(queue[0] + "\n");
-        queue.shift();
-        lastWriteAt = performance.now();
-      }
-    } finally {
-      active = false;
-      running = null;
-    }
-  }
-  function start2() {
-    if (!active) running = drain();
-    return running;
-  }
-  function kick(attempt = 0) {
-    start2().catch((err) => {
-      const delay = Math.min(spacingMs * 2 ** attempt, MAX_RETRY_MS);
-      log.error("Zeile konnte nicht geschrieben werden, neuer Versuch.", { error: String(err), delayMs: delay });
-      const t = setTimeout(() => kick(attempt + 1), delay);
-      t.unref?.();
-    });
-  }
-  const write2 = (line) => {
-    queue.push(line);
-    kick();
-  };
-  write2.flush = async ({ timeoutMs = 5e3 } = {}) => {
-    const deadline = performance.now() + timeoutMs;
-    while (queue.length && performance.now() < deadline) await defaultSleep(25);
-  };
-  return write2;
-}
-function forwardToWriter(writeLine) {
-  return (rawData) => writeLine(formatLine(rawData));
-}
-function formatLine(rawData) {
-  try {
-    const msg = JSON.parse(rawData);
-    const from = msg.from_session || "unknown";
-    const hasAttachment = Boolean(msg.attachment_id);
-    const raw = msg.text ?? (hasAttachment ? "(Bild ohne Text)" : rawData);
-    const text2 = typeof raw === "string" ? raw : String(raw);
-    const hint = hasAttachment ? ` [Bild angeh\xE4ngt, attachment_id=${msg.attachment_id} -- mit get_attachment abrufbar]` : "";
-    const prefix = `[${from}]: `;
-    if (prefix.length + text2.length + hint.length <= MAX_LINE_CHARS) {
-      return `${prefix}${text2}${hint}`;
-    }
-    const seq = Number.isInteger(msg.seq) ? msg.seq : null;
-    const marker = ` \u2026 [+${text2.length} Zeichen${seq === null ? "" : ` -- get_message(seq=${seq})`}]`;
-    const keep = Math.max(0, MAX_LINE_CHARS - prefix.length - marker.length - hint.length);
-    return `${prefix}${text2.slice(0, keep)}${marker}${hint}`.slice(0, MAX_LINE_CHARS);
-  } catch {
-    return typeof rawData === "string" ? rawData.slice(0, MAX_LINE_CHARS) : rawData;
-  }
-}
-async function startRelayListener({ writeLine } = {}) {
-  await ensureSessionId();
-  await registerOrLog();
-  let controller = new AbortController();
-  let stopping = false;
-  let signalEnded;
-  const ended = new Promise((resolve) => {
-    signalEnded = resolve;
-  });
-  const stop = () => {
-    stopping = true;
-    controller.abort();
-    signalEnded();
-  };
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
-  const out = writeLine ?? createLineWriter(process.stdout);
-  let boundId = config2.sessionId;
-  const watch = setInterval(async () => {
-    if (stopping) return;
-    try {
-      await refreshSessionId();
-    } catch (err) {
-      log.error("Session-ID konnte nicht neu gelesen werden.", { error: String(err) });
-    }
-    if (config2.sessionId === boundId) return;
-    boundId = config2.sessionId;
-    controller.abort();
-    controller = new AbortController();
-    await registerOrLog();
-    receive(controller);
-  }, config2.sessionIdCheckMs);
-  function receive(ctrl) {
-    runSseReceiver(forwardToWriter(out), { signal: ctrl.signal }).catch((err) => {
-      if (!ctrl.signal.aborted) log.error("SSE-Empfang beendet.", { error: String(err) });
-    });
-  }
-  receive(controller);
-  const running = ended.finally(() => clearInterval(watch));
-  return { stop, ended: running };
-}
-async function main() {
-  const writeLine = createLineWriter(process.stdout);
-  const listener = await startRelayListener({ writeLine });
-  try {
-    await listener.ended;
-  } finally {
-    await writeLine.flush();
-  }
-}
-async function registerOrLog() {
-  try {
-    await register();
-  } catch (err) {
-    log.error("Registrierung (Listener) fehlgeschlagen.", { error: String(err) });
-  }
-}
-var isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-if (isMain) {
-  main().catch((err) => {
-    log.error("Unerwarteter Fehler im Session-Bus-Listener.", { error: String(err) });
-    process.exit(1);
-  });
-}
-
-// server/collabLine.js
-var MONITOR_LINE_MAX = 500;
-var LINE_SAFETY = 20;
-var COLLAB_LINE_PREFIX = "[kwcollab";
-var COLLAB_KINDS = ["human", "claude", "system"];
-function collabShortId(collabId) {
-  return String(collabId || "").split("-")[0];
-}
-function collabHead({ collabId, seq, who, kind }) {
-  const n = Number(seq);
-  const seqPart = Number.isSafeInteger(n) && n > 0 ? `:${n}` : "";
-  return `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)}${seqPart} | ${who} | ${kind}] `;
-}
-function counterLength(n) {
-  return `(${n}/${n}) `.length;
-}
-var hardCutMarker = (missing) => `\u2026[+${missing} Zeichen]`;
-function splitAtWords(body, budget) {
-  const parts = [];
-  let rest = body.replace(/^\s+/, "");
-  while (rest.length > budget) {
-    const cut = rest.lastIndexOf(" ", budget);
-    if (cut > 0) {
-      parts.push(rest.slice(0, cut));
-      rest = rest.slice(cut + 1).replace(/^\s+/, "");
-      continue;
-    }
-    const keep = Math.max(1, budget - hardCutMarker(rest.length).length);
-    parts.push(rest.slice(0, keep) + hardCutMarker(rest.length - keep));
-    rest = rest.slice(keep);
-  }
-  if (rest) parts.push(rest);
-  return parts.length ? parts : [""];
-}
-function splitIntoLines(head, body, { cap, safety }) {
-  const base = cap - head.length - safety;
-  if (body.length <= base) return [head + body];
-  let counterWidth = 0;
-  let parts;
-  for (let i = 0; i < 12; i++) {
-    parts = splitAtWords(body, Math.max(1, base - counterWidth));
-    const need = counterLength(parts.length);
-    if (need <= counterWidth) break;
-    counterWidth = need;
-  }
-  const total = parts.length;
-  return parts.map((p, i) => `${head}(${i + 1}/${total}) ${p}`);
-}
-function collabLine({ collabId, seq = null, from, kind, text: text2, attachmentId, cap = MONITOR_LINE_MAX, safety = LINE_SAFETY }) {
-  const who = typeof from === "string" && from.trim() ? from.trim() : "?";
-  const authorKind = COLLAB_KINDS.includes(kind) ? kind : "claude";
-  let body = typeof text2 === "string" ? text2.trim() : "";
-  if (!body && attachmentId) body = `[Anhang: mit collab_get_attachment ${attachmentId} abrufbar]`;
-  const head = collabHead({ collabId, seq, who, kind: authorKind });
-  return splitIntoLines(head, body, { cap, safety });
-}
-function collabClosedLine(collabId) {
-  return `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)} | system] Kanal beendet -- Protokoll auf dem Server geloescht.`;
-}
-function senderName(message, members) {
-  const subject = message?.from_subject;
-  if (subject === "relay") return "kwcollab";
-  const m = (members || []).find((x) => x.subject === subject);
-  return m?.display_name || subject || "?";
-}
-
-// server/codeMonitor.js
-import { existsSync as existsSync5, readFileSync as readFileSync4 } from "node:fs";
-import { join as join5 } from "node:path";
-import { spawnSync } from "node:child_process";
-
-// server/codeServe.js
-import { spawn as spawn3 } from "node:child_process";
-import { gunzipSync } from "node:zlib";
-import { existsSync as existsSync4, mkdirSync as mkdirSync3, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join4 } from "node:path";
 
 // server/codeGit.js
 import { spawn as spawn2 } from "node:child_process";
-import { mkdirSync as mkdirSync2, existsSync as existsSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync2, renameSync as renameSync2, statSync } from "node:fs";
-import { join as join3, isAbsolute } from "node:path";
+import { mkdirSync, existsSync as existsSync3, readFileSync as readFileSync2, writeFileSync, renameSync, statSync } from "node:fs";
+import { join as join2, isAbsolute } from "node:path";
 var GIT_MIN = [2, 40];
 var NUL = "\0";
 function git(cwd2, args, { env = {}, input, maxBuffer = 64 * 1024 * 1024, timeoutMs = 12e4 } = {}) {
@@ -16479,21 +16131,21 @@ async function repoInfo(cwd2) {
   return { top, gitDir, head, branch, repo: url ? repoKey(url) : null };
 }
 function stateDir(gitDir) {
-  return join3(gitDir, "kwcollab");
+  return join2(gitDir, "kwcollab");
 }
-var statePath = (gitDir) => join3(stateDir(gitDir), "state.json");
+var statePath = (gitDir) => join2(stateDir(gitDir), "state.json");
 function readState(gitDir) {
   try {
-    return JSON.parse(readFileSync3(statePath(gitDir), "utf8"));
+    return JSON.parse(readFileSync2(statePath(gitDir), "utf8"));
   } catch {
     return null;
   }
 }
 function writeState(gitDir, state) {
-  mkdirSync2(stateDir(gitDir), { recursive: true });
+  mkdirSync(stateDir(gitDir), { recursive: true });
   const tmp = `${statePath(gitDir)}.${process.pid}.tmp`;
-  writeFileSync2(tmp, JSON.stringify(state, null, 2));
-  renameSync2(tmp, statePath(gitDir));
+  writeFileSync(tmp, JSON.stringify(state, null, 2));
+  renameSync(tmp, statePath(gitDir));
 }
 var COLLAB_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 var MEMBER_RE = /^[A-Za-z0-9_@-][A-Za-z0-9._@-]{0,127}$/;
@@ -16511,10 +16163,10 @@ var inRef = (collab, member) => `refs/kwcollab/${checkCollabId(collab)}/in/${che
 var SNAPSHOT_FILE_MAX = 1024 * 1024;
 var IGNORE_FILE = ".kwcollabignore";
 async function worktreeTree(top, gitDir) {
-  mkdirSync2(stateDir(gitDir), { recursive: true });
-  const env = { GIT_INDEX_FILE: join3(stateDir(gitDir), "index") };
+  mkdirSync(stateDir(gitDir), { recursive: true });
+  const env = { GIT_INDEX_FILE: join2(stateDir(gitDir), "index") };
   await gitText(top, ["read-tree", "HEAD"], { env });
-  const extra = existsSync3(join3(top, IGNORE_FILE)) ? [`--exclude-from=${IGNORE_FILE}`] : [];
+  const extra = existsSync3(join2(top, IGNORE_FILE)) ? [`--exclude-from=${IGNORE_FILE}`] : [];
   const listed = await git(top, ["ls-files", "-z", "--others", "--exclude-standard", ...extra], { env });
   if (listed.code !== 0) throw new Error(`git ls-files failed: ${listed.stderr.trim()}`);
   const untracked = listed.stdout.toString("utf8").split(NUL).filter(Boolean);
@@ -16523,7 +16175,7 @@ async function worktreeTree(top, gitDir) {
   for (const p of untracked) {
     let size = 0;
     try {
-      size = statSync(join3(top, p)).size;
+      size = statSync(join2(top, p)).size;
     } catch {
       continue;
     }
@@ -16636,9 +16288,9 @@ async function createBundle(top, collab, base) {
   return r.stdout;
 }
 async function importBundle(top, gitDir, collab, member, bytes) {
-  mkdirSync2(stateDir(gitDir), { recursive: true });
-  const file = join3(stateDir(gitDir), `in-${checkMember(member)}.bundle`);
-  writeFileSync2(file, bytes);
+  mkdirSync(stateDir(gitDir), { recursive: true });
+  const file = join2(stateDir(gitDir), `in-${checkMember(member)}.bundle`);
+  writeFileSync(file, bytes);
   const v = await git(top, ["bundle", "verify", "-q", file]);
   if (v.code !== 0) throw new Error(`Bundle von ${member} passt nicht auf diesen Stand: ${v.stderr.trim().split("\n").slice(-1)[0]}`);
   const r = await git(top, ["fetch", "-q", "--no-tags", "--no-write-fetch-head", file, `+${outRef(collab)}:${inRef(collab, member)}`]);
@@ -16662,7 +16314,7 @@ async function isAncestor(top, ancestor, descendant) {
 async function applyTree(top, gitDir, fromTree, targetTree) {
   const now = await worktreeTree(top, gitDir);
   if (now.tree !== fromTree) return { applied: false, reason: "worktree changed while merging" };
-  const env = { GIT_INDEX_FILE: join3(stateDir(gitDir), "index") };
+  const env = { GIT_INDEX_FILE: join2(stateDir(gitDir), "index") };
   const r = await git(top, ["read-tree", "-m", "-u", fromTree, targetTree], { env });
   if (r.code !== 0) return { applied: false, reason: r.stderr.trim() || "read-tree refused" };
   return { applied: true };
@@ -16670,10 +16322,10 @@ async function applyTree(top, gitDir, fromTree, targetTree) {
 async function filesWithMarkers(top, paths) {
   const left = [];
   for (const p of paths) {
-    const full = isAbsolute(p) ? p : join3(top, p);
+    const full = isAbsolute(p) ? p : join2(top, p);
     let text2 = "";
     try {
-      text2 = readFileSync3(full, "utf8");
+      text2 = readFileSync2(full, "utf8");
     } catch {
       continue;
     }
@@ -16697,453 +16349,8 @@ function globMatch(glob, path) {
 }
 var inArea = (area, path) => (area || []).some((g) => globMatch(g, path));
 
-// server/codeServe.js
-var enc = encodeURIComponent;
-var COLLAB_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-function relayAdapter({ relayUrl, getToken, fetchImpl = fetch }) {
-  async function request(method, path, { json: json2, raw, headers = {}, expect = "json" } = {}) {
-    const token = await getToken();
-    const res = await fetchImpl(`${relayUrl}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...json2 !== void 0 ? { "Content-Type": "application/json" } : {},
-        ...headers
-      },
-      body: json2 !== void 0 ? JSON.stringify(json2) : raw
-    });
-    if (!res.ok) {
-      const text2 = await res.text().catch(() => "");
-      let detail = text2;
-      try {
-        const p = JSON.parse(text2);
-        if (p?.error) detail = p.error;
-      } catch {
-      }
-      const err = new Error(`Relay ${method} ${path} -> ${res.status}: ${detail}`);
-      err.status = res.status;
-      throw err;
-    }
-    if (expect === "raw") return Buffer.from(await res.arrayBuffer());
-    if (res.status === 204) return null;
-    return res.json();
-  }
-  return {
-    get: (path) => request("GET", path),
-    post: (path, json2) => request("POST", path, { json: json2 }),
-    put: (path, json2) => request("PUT", path, { json: json2 }),
-    postRaw: (path, raw, headers) => request("POST", path, { raw, headers }),
-    getRaw: (path) => request("GET", path, { expect: "raw" })
-  };
-}
-function makeFetchLive({ relayUrl, getToken }) {
-  return async (ctx, collabId, member) => {
-    const token = await getToken();
-    const url = `${relayUrl}/v1/collabs/${enc(collabId)}/git/${enc(member)}`;
-    const env = {
-      GIT_CONFIG_COUNT: "2",
-      GIT_CONFIG_KEY_0: "http.extraHeader",
-      GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
-      GIT_CONFIG_KEY_1: "credential.helper",
-      GIT_CONFIG_VALUE_1: ""
-    };
-    const r = await git(ctx.top, ["fetch", "-q", "--no-tags", "--no-write-fetch-head", url, `+${outRef(collabId)}:${inRef(collabId, member)}`], { env, timeoutMs: 6e4 });
-    if (r.code !== 0) throw new Error(`live fetch failed: ${r.stderr.trim().replace(token, "***")}`);
-    return gitText(ctx.top, ["rev-parse", inRef(collabId, member)]);
-  };
-}
-function uploadPackConfig(collabId) {
-  return [
-    "-c",
-    "uploadpack.hideRefs=refs/",
-    "-c",
-    "uploadpack.hideRefs=HEAD",
-    "-c",
-    `uploadpack.hideRefs=!${outRef(collabId)}`,
-    "-c",
-    "uploadpack.allowTipSHA1InWant=false",
-    "-c",
-    "uploadpack.allowReachableSHA1InWant=false",
-    "-c",
-    "uploadpack.allowAnySHA1InWant=false",
-    "-c",
-    "uploadpack.allowFilter=false"
-  ];
-}
-async function serveRepo(top, collabId) {
-  const gitDir = await gitText(top, ["rev-parse", "--absolute-git-dir"]);
-  const common = await gitText(top, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-  const dir = join4(gitDir, "kwcollab", `serve-${collabId}.git`);
-  if (!existsSync4(join4(dir, "HEAD"))) {
-    mkdirSync3(dir, { recursive: true });
-    await gitText(dir, ["init", "-q", "--bare"]);
-    mkdirSync3(join4(dir, "objects", "info"), { recursive: true });
-  }
-  writeFileSync3(join4(dir, "objects", "info", "alternates"), `${join4(common, "objects").replace(/\\/g, "/")}
-`);
-  const head = await git(top, ["rev-parse", "--verify", "-q", outRef(collabId)]);
-  if (head.code === 0) {
-    await gitText(dir, ["update-ref", outRef(collabId), head.stdout.toString().trim()]);
-  }
-  await gitText(dir, ["symbolic-ref", "HEAD", outRef(collabId)]);
-  return dir;
-}
-async function runUploadPack(top, collabId, opts) {
-  const dir = await serveRepo(top, collabId);
-  return uploadPackIn(dir, collabId, opts);
-}
-function uploadPackIn(dir, collabId, { kind, body, gitProtocol }) {
-  const top = dir;
-  return new Promise((resolve, reject) => {
-    const args = [...uploadPackConfig(collabId), "upload-pack", "--stateless-rpc"];
-    if (kind === "advertise") args.push("--advertise-refs");
-    args.push(".");
-    const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
-    for (const k of ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE"]) delete env[k];
-    if (gitProtocol && /^version=[0-9]$/.test(gitProtocol)) env.GIT_PROTOCOL = gitProtocol;
-    const child = spawn3("git", args, { cwd: top, env, windowsHide: true });
-    const out = [];
-    const err = [];
-    let size = 0;
-    const max = 32 * 1024 * 1024;
-    const timer = setTimeout(() => child.kill(), 3e4);
-    child.stdout.on("data", (c) => {
-      size += c.length;
-      if (size > max) {
-        child.kill();
-        return;
-      }
-      out.push(c);
-    });
-    child.stderr.on("data", (c) => err.push(c));
-    child.on("error", (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code !== 0 || size > max) {
-        return reject(new Error(`upload-pack ${code}: ${Buffer.concat(err).toString("utf8").trim().slice(0, 300)}`));
-      }
-      let payload = Buffer.concat(out);
-      if (kind === "advertise") {
-        const line = "# service=git-upload-pack\n";
-        const pkt = (line.length + 4).toString(16).padStart(4, "0") + line;
-        payload = Buffer.concat([Buffer.from(pkt), Buffer.from("0000"), payload]);
-      }
-      resolve(payload);
-    });
-    child.stdin.end(body && body.length ? body : void 0);
-  });
-}
-var SERVE_REQUEST_INFLATED_MAX = 8 * 1024 * 1024;
-async function answerServeFrame(top, collabId, frame) {
-  if (!COLLAB_UUID_RE.test(String(collabId))) throw new Error("collab id invalid");
-  let body = frame.body_b64 ? Buffer.from(frame.body_b64, "base64") : Buffer.alloc(0);
-  if (frame.gzip) body = gunzipSync(body, { maxOutputLength: SERVE_REQUEST_INFLATED_MAX });
-  return runUploadPack(top, collabId, { kind: frame.kind, body, gitProtocol: frame.git_protocol });
-}
-async function startServing({ relayUrl, getToken, collabId, top, signal, runSse, fetchImpl = fetch, onError = () => {
-} }) {
-  const url = `${relayUrl}/v1/collabs/${enc(collabId)}/code/serve`;
-  await runSse(async (data, event) => {
-    if (event !== "request") return;
-    let frame;
-    try {
-      frame = JSON.parse(data);
-    } catch {
-      return;
-    }
-    if (!frame || !/^[0-9a-f]{32}$/.test(String(frame.rid))) return;
-    let status2 = 200;
-    let payload;
-    try {
-      payload = await answerServeFrame(top, collabId, frame);
-    } catch (e) {
-      status2 = 500;
-      payload = Buffer.from(String(e?.message || e));
-      onError(e);
-    }
-    try {
-      const token = await getToken();
-      await fetchImpl(`${relayUrl}/v1/collabs/${enc(collabId)}/code/serve/${frame.rid}`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream", "X-Kwcollab-Status": String(status2) },
-        body: payload
-      });
-    } catch (e) {
-      onError(e);
-    }
-  }, { signal, url });
-}
-
-// server/codeMonitor.js
-function localState(cwd2) {
-  const r = spawnSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: cwd2, encoding: "utf8", windowsHide: true });
-  if (r.status !== 0) return null;
-  const file = join5(r.stdout.trim(), "kwcollab", "state.json");
-  if (!existsSync5(file)) return null;
-  try {
-    return { ...JSON.parse(readFileSync4(file, "utf8")), top: spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: cwd2, encoding: "utf8", windowsHide: true }).stdout.trim() };
-  } catch {
-    return null;
-  }
-}
-function codeServing({ cwd: cwd2 }) {
-  const serving = /* @__PURE__ */ new Map();
-  const relay2 = relayAdapter({ relayUrl: config2.relayUrl, getToken: getAccessToken });
-  async function refresh(collabId, entry) {
-    const st = localState(cwd2);
-    if (!st || st.collab !== collabId) {
-      drop(collabId);
-      return;
-    }
-    try {
-      const code = await relay2.get(`/v1/collabs/${encodeURIComponent(collabId)}/code`);
-      const mine = (code.members || []).find((m) => m.subject === st.me);
-      entry.wake = mine?.mandate?.wake !== false;
-    } catch (err) {
-      log.error("Code-Status nicht abrufbar.", { collabId, error: String(err) });
-    }
-    if (serving.has(collabId)) return;
-    const controller = new AbortController();
-    serving.set(collabId, controller);
-    log.info("Code-Austausch: stelle St\xE4nde bereit.", { collabId });
-    startServing({
-      relayUrl: config2.relayUrl,
-      getToken: getAccessToken,
-      collabId,
-      top: st.top,
-      signal: controller.signal,
-      runSse: (onMessage, opts) => runSseReceiver(onMessage, opts),
-      onError: (e) => log.error("Bereitstellen fehlgeschlagen.", { collabId, error: String(e) })
-    }).catch((err) => {
-      if (!controller.signal.aborted) log.error("Bereitstellen beendet.", { collabId, error: String(err) });
-    });
-  }
-  function drop(collabId) {
-    const c = serving.get(collabId);
-    if (c) {
-      c.abort();
-      serving.delete(collabId);
-    }
-  }
-  return { refresh, drop };
-}
-
-// server/collab-listen.js
-var COLLAB_POLL_MS = readCheckInterval(process.env.KWOS_COLLAB_POLL_MS, 15e3);
-function collabReleased(env = process.env) {
-  if (String(env?.KWOS_NO_COLLAB ?? "") !== "") return false;
-  const v = String(env?.KWOS_COLLAB_CANARY ?? "").trim().toLowerCase();
-  return v === "1" || v === "true" || v === "yes";
-}
-function stdinIsChannel(fd = 0) {
-  try {
-    const st = fstatSync(fd);
-    return st.isFIFO() || st.isSocket();
-  } catch {
-    return false;
-  }
-}
-function seqOf(raw) {
-  try {
-    const msg = JSON.parse(raw);
-    return Number(msg?.seq) || 0;
-  } catch {
-    return 0;
-  }
-}
-function frameToLine(raw, { members = [], selfSessionId = null, collabId = null, after = 0, wakeOnCode = true } = {}) {
-  let msg;
-  try {
-    msg = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!msg || typeof msg !== "object") return null;
-  if (!msg.seq) return msg.collab_id ? [collabClosedLine(msg.collab_id)] : null;
-  if (Number(msg.seq) <= Number(after)) return null;
-  if (selfSessionId && msg.from_session === selfSessionId && msg.author_kind !== "human") return null;
-  if (takeOwnHumanLine(msg.seq)) return null;
-  if (msg.kind === "code" && !wakeOnCode && msg.payload?.type !== "escalate") return null;
-  return collabLine({
-    collabId: msg.collab_id || collabId,
-    seq: msg.seq,
-    from: senderName(msg, members),
-    kind: msg.author_kind,
-    text: msg.text,
-    attachmentId: msg.attachment_id
-  });
-}
-async function startCollabListener({ writeLine, env = process.env, stdin = process.stdin, isChannel = stdinIsChannel, codeServing: codeServing2 = codeServing } = {}) {
-  if (!collabReleased(env)) {
-    log.info("kwcollab ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY) -- kein Empfang.");
-    return null;
-  }
-  await ensureSessionId();
-  let stopping = false;
-  let signalEnded;
-  const ended = new Promise((resolve) => {
-    signalEnded = resolve;
-  });
-  const stop = () => {
-    stopping = true;
-    signalEnded();
-  };
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
-  try {
-    stdin.resume?.();
-    if (isChannel()) {
-      stdin.on("end", stop);
-      stdin.on("close", stop);
-      stdin.on("error", stop);
-    } else {
-      stdin.on("error", () => {
-      });
-      log.info("stdin ist kein Kanal (/dev/null) -- der Kollab-Empfang lebt mit dem Prozess, nicht mit stdin.");
-    }
-  } catch {
-  }
-  const open = /* @__PURE__ */ new Map();
-  const closeAll = () => {
-    for (const [id, entry] of open) {
-      entry.controller.abort();
-      code?.drop(id);
-    }
-    open.clear();
-  };
-  const code = codeServing2 ? codeServing2({ cwd: sessionCwd }) : null;
-  let lastJoined = /* @__PURE__ */ new Set();
-  let inflight = null;
-  function poll() {
-    if (stopping) return Promise.resolve();
-    if (!inflight) inflight = pollOnce().finally(() => {
-      inflight = null;
-    });
-    return inflight;
-  }
-  async function pollOnce() {
-    let joined = [];
-    try {
-      joined = await myJoinedCollabs();
-    } catch (err) {
-      log.error("Collab-Liste nicht abrufbar.", { error: String(err) });
-      return;
-    }
-    const wanted = new Set(joined.map((c) => c.collab_id));
-    lastJoined = wanted;
-    for (const [id, entry] of [...open]) {
-      if (!wanted.has(id)) {
-        entry.controller.abort();
-        open.delete(id);
-        code?.drop(id);
-      }
-    }
-    for (const c of joined) {
-      const members = Array.isArray(c.members) ? c.members : [];
-      const existing = open.get(c.collab_id);
-      if (existing) {
-        existing.members = members;
-        await code?.refresh(c.collab_id, existing);
-        continue;
-      }
-      const controller = new AbortController();
-      const entry = { controller, members, lastSeq: readCursor(c.collab_id) ?? 0 };
-      entry.printedSeq = entry.lastSeq;
-      open.set(c.collab_id, entry);
-      await code?.refresh(c.collab_id, entry);
-      log.info("Collab-Kanal verbunden.", { collabId: c.collab_id, workitem: c.workitem });
-      runSseReceiver(
-        (raw) => {
-          const lines = frameToLine(raw, {
-            members: entry.members,
-            selfSessionId: config2.sessionId,
-            collabId: c.collab_id,
-            // Already printed in THIS process: a reconnect must not repeat a line (the receiver
-            // resumes by `Last-Event-ID`, this is the second belt for a frame that arrives twice).
-            after: entry.printedSeq,
-            wakeOnCode: entry.wake !== false
-          });
-          if (!lines) return;
-          entry.printedSeq = Math.max(entry.printedSeq, seqOf(raw));
-          for (const line of lines) writeLine(line);
-        },
-        {
-          signal: controller.signal,
-          url: collabEventsUrl(c.collab_id),
-          // THIS machine's place in the channel, kept on disk: a closed and reopened session
-          // starts a new process, and without the note it asks the relay for the whole protocol
-          // again (field report 2026-10-19).
-          since: entry.lastSeq > 0 ? entry.lastSeq : null,
-          onEventId: (id) => {
-            const seq = Number(id);
-            if (!Number.isFinite(seq) || seq <= entry.lastSeq) return;
-            entry.lastSeq = seq;
-            rememberCursor(c.collab_id, seq);
-          }
-        }
-      ).catch((err) => {
-        if (!controller.signal.aborted) log.error("Collab-Empfang beendet.", { error: String(err) });
-      });
-    }
-  }
-  let boundId = config2.sessionId;
-  const watch = setInterval(async () => {
-    if (stopping) return;
-    try {
-      await refreshSessionId();
-    } catch (err) {
-      log.error("Session-ID konnte nicht neu gelesen werden.", { error: String(err) });
-    }
-    if (config2.sessionId === boundId) return;
-    boundId = config2.sessionId;
-    const was = [.../* @__PURE__ */ new Set([...open.keys(), ...lastJoined])];
-    closeAll();
-    for (const id of was) {
-      try {
-        await acceptCollab(id);
-      } catch (err) {
-        log.error("Kanal nach dem Session-Wechsel nicht neu angenommen.", { collabId: id, error: String(err) });
-      }
-    }
-    await poll();
-  }, config2.sessionIdCheckMs);
-  watch.unref();
-  let pollTimer = null;
-  const running = (async () => {
-    await poll();
-    pollTimer = setInterval(() => {
-      poll().catch(() => {
-      });
-    }, COLLAB_POLL_MS);
-    pollTimer.unref();
-    await ended;
-  })().catch((err) => log.error("Collab-Empfang beendet.", { error: String(err) })).finally(() => {
-    clearInterval(watch);
-    if (pollTimer) clearInterval(pollTimer);
-    closeAll();
-  });
-  return { stop, ended: running };
-}
-async function main2() {
-  const writeLine = createLineWriter(process.stdout);
-  const listener = await startCollabListener({ writeLine });
-  if (!listener) return;
-  await listener.ended;
-  await writeLine.flush();
-}
-var isMain2 = process.argv[1] && fileURLToPath2(import.meta.url) === process.argv[1];
-if (isMain2) {
-  main2().catch((err) => {
-    log.error("Unerwarteter Fehler im Collab-Listener.", { error: String(err) });
-    process.exit(1);
-  });
-}
-
 // server/codeExchange.js
-var enc2 = encodeURIComponent;
+var enc = encodeURIComponent;
 async function localContext(cwd2, collabId) {
   await checkGitVersion(cwd2);
   const info = await repoInfo(cwd2);
@@ -17155,7 +16362,7 @@ async function localContext(cwd2, collabId) {
   return { ...info, state };
 }
 async function codeState(relay2, collabId) {
-  return relay2.get(`/v1/collabs/${enc2(collabId)}/code`);
+  return relay2.get(`/v1/collabs/${enc(collabId)}/code`);
 }
 async function ensureBase(top, branch, base) {
   const have = await git(top, ["cat-file", "-e", `${base}^{commit}`]);
@@ -17177,18 +16384,18 @@ async function start(relay2, { cwd: cwd2, collabId, me, mandate }) {
   if (!await isAncestor(ctx.top, ctx.head, remoteHead)) {
     throw new Error(`HEAD ${ctx.head.slice(0, 7)} liegt nicht auf origin/${ctx.branch}. Erst pushen, dann den Code-Modus starten.`);
   }
-  const res = await relay2.post(`/v1/collabs/${enc2(collabId)}/code`, { repo: ctx.repo, branch: ctx.branch, base: ctx.head, mandate });
+  const res = await relay2.post(`/v1/collabs/${enc(collabId)}/code`, { repo: ctx.repo, branch: ctx.branch, base: ctx.head, mandate });
   const base = res.code.base;
   await ensureBase(ctx.top, ctx.branch, base);
   writeState(ctx.gitDir, ctx.state?.base === base ? ctx.state : freshState(collabId, me, base, ctx.branch));
   return { repo: ctx.repo, branch: ctx.branch, base, mandate: res.mandate };
 }
-async function join6(relay2, { cwd: cwd2, collabId, me, mandate }) {
+async function join3(relay2, { cwd: cwd2, collabId, me, mandate }) {
   const ctx = await localContext(cwd2, collabId);
   const cur = await codeState(relay2, collabId);
   if (!cur.code) throw new Error("Der Code-Modus ist in diesem Collab noch nicht eingeschaltet.");
   if (cur.code.repo !== ctx.repo) throw new Error(`Dieser Collab arbeitet in ${cur.code.repo}, dieser Worktree in ${ctx.repo}.`);
-  const res = await relay2.put(`/v1/collabs/${enc2(collabId)}/code/mandate`, { repo: ctx.repo, mandate });
+  const res = await relay2.put(`/v1/collabs/${enc(collabId)}/code/mandate`, { repo: ctx.repo, mandate });
   await ensureBase(ctx.top, cur.code.branch, cur.code.base);
   if (!await isAncestor(ctx.top, cur.code.base, ctx.head) && !await isAncestor(ctx.top, ctx.head, cur.code.base)) {
     throw new Error(`Dieser Worktree steht nicht auf der Basis ${cur.code.base.slice(0, 7)} (${cur.code.branch}). Erst \`git checkout ${cur.code.branch}\` bzw. auf die Basis wechseln.`);
@@ -17216,14 +16423,14 @@ async function publish(relay2, { cwd: cwd2, collabId, identity, sessionId, servi
   const prevOut = await git(ctx.top, ["rev-parse", "--verify", "-q", outRef(collabId)]);
   await gitText(ctx.top, ["update-ref", outRef(collabId), snap.head, ...prevOut.code === 0 ? [prevOut.stdout.toString().trim()] : []]);
   const bytes = await createBundle(ctx.top, collabId, st.base);
-  const up = await relay2.postRaw(`/v1/collabs/${enc2(collabId)}/code/bundles`, bytes, {
+  const up = await relay2.postRaw(`/v1/collabs/${enc(collabId)}/code/bundles`, bytes, {
     "Content-Type": "application/x-git-bundle",
     "X-Kwcollab-Head": snap.head,
     "X-Kwcollab-Prereqs": st.base
   });
   const all = await changedFiles(ctx.top, st.base, snap.head);
   const files = all.slice(0, 500);
-  await relay2.post(`/v1/collabs/${enc2(collabId)}/code/events`, {
+  await relay2.post(`/v1/collabs/${enc(collabId)}/code/events`, {
     session_id: sessionId,
     payload: {
       type: "snapshot",
@@ -17248,7 +16455,7 @@ async function fetchMember(relay2, ctx, collabId, member, fetchLive2) {
     }
   }
   if (!member.bundle_id) throw new Error(`Der Stand von ${member.subject} ist gerade nicht abrufbar (kein Bundle, nicht online).`);
-  const bundle = await relay2.getRaw(`/v1/collabs/${enc2(collabId)}/code/bundles/${enc2(member.bundle_id)}`);
+  const bundle = await relay2.getRaw(`/v1/collabs/${enc(collabId)}/code/bundles/${enc(member.bundle_id)}`);
   const head = await importBundle(ctx.top, ctx.gitDir, collabId, member.subject, bundle);
   return { head, via: "bundle" };
 }
@@ -17306,7 +16513,7 @@ async function sync(relay2, { cwd: cwd2, collabId, me, mandate, sessionId, fetch
       }
       st = { ...st, integrated: { ...st.integrated, [m.subject]: theirs }, pending: [.../* @__PURE__ */ new Set([...st.pending, theirs])] };
       writeState(ctx.gitDir, st);
-      await relay2.post(`/v1/collabs/${enc2(collabId)}/code/events`, {
+      await relay2.post(`/v1/collabs/${enc(collabId)}/code/events`, {
         session_id: sessionId,
         payload: { type: "integrated", from_member: m.subject, head: theirs, result: "clean", paths: files.slice(0, 500) }
       });
@@ -17320,7 +16527,7 @@ async function sync(relay2, { cwd: cwd2, collabId, me, mandate, sessionId, fetch
       const proposal = mineSeq > (m.head_seq ?? 0) ? me : m.subject;
       const myArea = merged.conflicts.every((p) => inArea(mandate.area, p));
       const resolver = myArea && proposal === me ? m.subject : proposal;
-      const res = await relay2.post(`/v1/collabs/${enc2(collabId)}/code/events`, {
+      const res = await relay2.post(`/v1/collabs/${enc(collabId)}/code/events`, {
         session_id: sessionId,
         payload: { type: "conflict", with_member: m.subject, with_head: theirs, own_head: ours.head, resolver, paths: merged.conflicts.slice(0, 500) }
       });
@@ -17347,7 +16554,7 @@ async function sync(relay2, { cwd: cwd2, collabId, me, mandate, sessionId, fetch
       conflicts: [...st.conflicts.filter((c) => c.member !== m.subject), { member: m.subject, head: theirs, paths: merged.conflicts }]
     };
     writeState(ctx.gitDir, st);
-    await relay2.post(`/v1/collabs/${enc2(collabId)}/code/events`, {
+    await relay2.post(`/v1/collabs/${enc(collabId)}/code/events`, {
       session_id: sessionId,
       payload: { type: "adapt", to_head: theirs, with_member: m.subject }
     });
@@ -17364,7 +16571,7 @@ async function resolved(relay2, { cwd: cwd2, collabId, identity, sessionId }) {
   if (left.length > 0) throw new Error(`Noch Konfliktmarker in: ${left.join(", ")}`);
   const pub = await publish(relay2, { cwd: cwd2, collabId, identity, sessionId, duringResolve: true });
   for (const c of st.conflicts.filter((x) => x.member !== "checkpoint")) {
-    await relay2.post(`/v1/collabs/${enc2(collabId)}/code/events`, {
+    await relay2.post(`/v1/collabs/${enc(collabId)}/code/events`, {
       session_id: sessionId,
       payload: { type: "integrated", from_member: c.member, head: c.head, result: "resolved", paths: c.paths.slice(0, 500) }
     });
@@ -17403,7 +16610,7 @@ ${trailers}` : message]);
     await gitText(ctx.top, ["reset", "-q"]);
     throw new Error(`Push abgelehnt (${push.stderr.trim().split("\n").slice(-1)[0]}). Wahrscheinlich war jemand schneller -- Commit zur\xFCckgenommen, Dateien bleiben.`);
   }
-  await relay2.post(`/v1/collabs/${enc2(collabId)}/code/events`, { session_id: sessionId, payload: { type: "checkpoint", sha, branch: st.branch } });
+  await relay2.post(`/v1/collabs/${enc(collabId)}/code/events`, { session_id: sessionId, payload: { type: "checkpoint", sha, branch: st.branch } });
   await git(ctx.top, ["update-ref", "-d", outRef(collabId)]);
   writeState(ctx.gitDir, freshState(collabId, me, sha, st.branch));
   return { sha, branch: st.branch };
@@ -17471,6 +16678,66 @@ function summaryLine(report, names = {}) {
   if (report.some((x) => x.kind === "rebase")) parts.push("Neuer Checkpoint -- Basis wechseln");
   return parts.length > 0 ? `kwcollab: ${parts.join(". ")}.` : null;
 }
+
+// server/codeServe.js
+import { spawn as spawn3 } from "node:child_process";
+import { gunzipSync } from "node:zlib";
+import { existsSync as existsSync4, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { join as join4 } from "node:path";
+var enc2 = encodeURIComponent;
+function relayAdapter({ relayUrl, getToken, fetchImpl = fetch }) {
+  async function request(method, path, { json: json2, raw, headers = {}, expect = "json" } = {}) {
+    const token = await getToken();
+    const res = await fetchImpl(`${relayUrl}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...json2 !== void 0 ? { "Content-Type": "application/json" } : {},
+        ...headers
+      },
+      body: json2 !== void 0 ? JSON.stringify(json2) : raw
+    });
+    if (!res.ok) {
+      const text2 = await res.text().catch(() => "");
+      let detail = text2;
+      try {
+        const p = JSON.parse(text2);
+        if (p?.error) detail = p.error;
+      } catch {
+      }
+      const err = new Error(`Relay ${method} ${path} -> ${res.status}: ${detail}`);
+      err.status = res.status;
+      throw err;
+    }
+    if (expect === "raw") return Buffer.from(await res.arrayBuffer());
+    if (res.status === 204) return null;
+    return res.json();
+  }
+  return {
+    get: (path) => request("GET", path),
+    post: (path, json2) => request("POST", path, { json: json2 }),
+    put: (path, json2) => request("PUT", path, { json: json2 }),
+    postRaw: (path, raw, headers) => request("POST", path, { raw, headers }),
+    getRaw: (path) => request("GET", path, { expect: "raw" })
+  };
+}
+function makeFetchLive({ relayUrl, getToken }) {
+  return async (ctx, collabId, member) => {
+    const token = await getToken();
+    const url = `${relayUrl}/v1/collabs/${enc2(collabId)}/git/${enc2(member)}`;
+    const env = {
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_0: "http.extraHeader",
+      GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
+      GIT_CONFIG_KEY_1: "credential.helper",
+      GIT_CONFIG_VALUE_1: ""
+    };
+    const r = await git(ctx.top, ["fetch", "-q", "--no-tags", "--no-write-fetch-head", url, `+${outRef(collabId)}:${inRef(collabId, member)}`], { env, timeoutMs: 6e4 });
+    if (r.code !== 0) throw new Error(`live fetch failed: ${r.stderr.trim().replace(token, "***")}`);
+    return gitText(ctx.top, ["rev-parse", inRef(collabId, member)]);
+  };
+}
+var SERVE_REQUEST_INFLATED_MAX = 8 * 1024 * 1024;
 
 // server/codeRuntime.js
 function relay() {
@@ -17682,7 +16949,7 @@ async function handleCodeTool(name, args = {}) {
     }
     case "collab_code_join": {
       const ctx = await ctxOrThrow(args, { needActive: false });
-      const r = await join6(relay(), { cwd: cwd(), collabId: ctx.collabId, me: ctx.me, mandate: args.mandate || {} });
+      const r = await join3(relay(), { cwd: cwd(), collabId: ctx.collabId, me: ctx.me, mandate: args.mandate || {} });
       const s = await sync(relay(), { cwd: cwd(), collabId: ctx.collabId, me: ctx.me, mandate: r.mandate, sessionId: ctx.sessionId, fetchLive: fetchLive() });
       return text(`Beigetreten (${r.repo} ${r.branch}, Basis ${r.base.slice(0, 7)}, Mandat ${r.mandate.apply}).
 ${reportText(s.report, ctx.names)}${await memoryText(ctx)}`);
@@ -17756,7 +17023,6 @@ ${reportText(s.report, ctx.names)}${await memoryText(ctx)}`);
 }
 
 // server/index.js
-var COLLAB_TOOL_PREFIX = "collab_";
 var TOOLS = [
   {
     name: "list_sessions",
@@ -17978,11 +17244,11 @@ var TOOLS = [
       additionalProperties: false
     }
   },
-  // Code exchange (WI 11517979): own file, same `collab_` gate.
+  // Code exchange (WI 11517979): own file.
   ...CODE_TOOLS
 ];
 var server = new Server(
-  { name: "kwos-session-bus", version: "0.5.2" },
+  { name: "kwos-session-bus", version: "0.6.0" },
   { capabilities: { tools: {} } }
 );
 var REMOTE_ONLY_TOOLS = /* @__PURE__ */ new Set(["ask_remote"]);
@@ -17993,15 +17259,11 @@ function remoteActive(env = process.env) {
 }
 function visibleTools(env = process.env) {
   let tools = TOOLS;
-  if (!collabReleased(env)) tools = tools.filter((t) => !t.name.startsWith(COLLAB_TOOL_PREFIX));
   if (!remoteActive(env)) tools = tools.filter((t) => !REMOTE_ONLY_TOOLS.has(t.name));
   return tools;
 }
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: visibleTools() }));
 async function handleToolCall(name, args = {}) {
-  if (name.startsWith(COLLAB_TOOL_PREFIX) && !collabReleased()) {
-    throw new Error("Zusammenarbeit ist auf diesem Rechner nicht freigegeben (KWOS_COLLAB_CANARY).");
-  }
   if (REMOTE_ONLY_TOOLS.has(name) && !remoteActive()) {
     throw new Error(name + " gibt es nur in einer Remote-Control-Sitzung (--kwremote) -- dieser Mensch sitzt am Terminal, frag dort.");
   }
@@ -18170,7 +17432,7 @@ async function callTool(request) {
   }
 }
 server.setRequestHandler(CallToolRequestSchema, callTool);
-async function main3() {
+async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   await ensureSessionId();
@@ -18180,7 +17442,7 @@ async function main3() {
   } catch (err) {
     log.error("Registrierung fehlgeschlagen.", { error: String(err) });
   }
-  if (config2.collab && collabReleased()) {
+  if (config2.collab) {
     try {
       await acceptCollab(config2.collab);
       log.info("Collab-Kanal beigetreten.", { collabId: config2.collab });
@@ -18210,9 +17472,9 @@ async function main3() {
   }, config2.sessionIdCheckMs);
   rebindTimer.unref();
 }
-var isMain3 = process.argv[1] && fileURLToPath3(import.meta.url) === process.argv[1];
-if (isMain3) {
-  main3().catch((err) => {
+var isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
+  main().catch((err) => {
     log.error("Unerwarteter Fehler beim Start.", { error: String(err) });
     process.exit(1);
   });

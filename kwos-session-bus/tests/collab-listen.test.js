@@ -18,10 +18,9 @@ import { MARKER_DIR, clientMarkerName } from "../server/sessionMarker.js";
 // Naht. Ein Doppel, das beim `resume()` `end` schickt, ist genau das, was /dev/null tut.
 
 // KWOS_XID_ACCESS_TOKEN und KWOS_CLIENT_ID MUESSEN vor dem Laden von config.js stehen (s.
-// collab.test.js); der Schalter gibt den Empfangspfad frei.
+// collab.test.js). Kein Freigabeschalter: der Empfangspfad laeuft immer (WI 11535931).
 process.env.KWOS_XID_ACCESS_TOKEN = "test-token";
 process.env.KWOS_CLIENT_ID = "collab-listen-test";
-process.env.KWOS_COLLAB_CANARY = "1";
 // The read cursor is per machine and survives a process on purpose (s. collabCursor.js). A test
 // must not read the developer's real notes -- and the previous test must not leave a cursor that
 // swallows the next one's frame.
@@ -159,7 +158,7 @@ test("stdin ohne Kanal (/dev/null): der Empfang lebt weiter und die Zeile kommt 
     isChannel: () => false,
   });
   try {
-    assert.ok(handle, "der Empfang muss starten (Ring ist freigegeben)");
+    assert.ok(handle, "der Empfang muss starten (kein Freigabeschalter seit WI 11535931)");
     // Die Naht muss WIRKLICH die des Tests sein -- sonst haengt dieser Fall am stdin der Suite und
     // faellt nur dort, wo das zufaellig am EOF steht (ein Test, der von der Umgebung abhaengt).
     assert.equal(stdin.resumed, true, "der Empfang muss DIESES stdin genommen haben");
