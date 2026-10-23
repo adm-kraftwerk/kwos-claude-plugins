@@ -1,9 +1,9 @@
-import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { config, ensureSessionId, refreshSessionId } from "./config.js";
 import { log } from "./log.js";
+import { isMainModule } from "./is-main.js";
 import * as relay from "./relay-client.js";
 import * as collab from "./collab.js";
 import { CODE_TOOLS, CODE_TOOL_NAMES, handleCodeTool } from "./codeTools.js";
@@ -313,7 +313,7 @@ export const TOOLS = [
 // The version the MCP client sees in the handshake. It names the SAME artifact as plugin.json /
 // marketplace.json, so it moves with them -- it had been left at 0.5.0 through the 0.5.1 bump.
 const server = new Server(
-  { name: "kwos-session-bus", version: "0.6.0" },
+  { name: "kwos-session-bus", version: "0.6.1" },
   { capabilities: { tools: {} } }
 );
 
@@ -639,11 +639,12 @@ async function main() {
   // vom 2026-07-16 zum offiziellen `monitors`-Manifest-Key.
 }
 
-// Nur beim direkten Start ausführen (node server/index.js bzw. das gebündelte .mjs), NICHT
-// beim `import` aus einem Test -- sonst würde jeder Test, der TOOLS/handleToolCall importiert,
-// unbeabsichtigt einen echten stdio-Server verbinden und sich beim Relay registrieren.
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-if (isMain) {
+// Only on a direct start (node server/index.js, or the bundle that .mcp.json launches), NOT on an
+// `import` from a test -- otherwise every test that imports TOOLS/handleToolCall would open a real
+// stdio server and register itself with the relay. The comparison resolves both paths: a symlinked
+// plugin directory used to make this guard silently false and take the whole session bus with it
+// (WI 11550391). See server/is-main.js.
+if (isMainModule(import.meta.url)) {
   main().catch((err) => {
     log.error("Unerwarteter Fehler beim Start.", { error: String(err) });
     process.exit(1);

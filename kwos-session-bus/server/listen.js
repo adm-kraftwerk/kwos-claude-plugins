@@ -17,8 +17,8 @@
 // liefert die Notification, was Claude damit macht, entscheidet die jeweilige Session selbst
 // (Reaction Policy §2.3: wie User-Input behandeln, nicht blind ausführen).
 
-import { fileURLToPath } from "node:url";
 import { config, ensureSessionId, refreshSessionId } from "./config.js";
+import { isMainModule } from "./is-main.js";
 import { log } from "./log.js";
 import * as relay from "./relay-client.js";
 import { runSseReceiver } from "./sse-receiver.js";
@@ -274,10 +274,10 @@ async function registerOrLog() {
   }
 }
 
-// Guard wie in index.js -- ein `import` aus einem Test soll nicht sofort eine echte
-// SSE-Verbindung/Registrierung auslösen.
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-if (isMain) {
+// Guard as in index.js: an `import` from a test must not open a real SSE connection or register
+// anything. Both paths are resolved first -- a symlinked plugin directory used to make this false
+// and let the process exit 0 in silence (WI 11550391). See server/is-main.js.
+if (isMainModule(import.meta.url)) {
   main().catch((err) => {
     log.error("Unerwarteter Fehler im Session-Bus-Listener.", { error: String(err) });
     process.exit(1);
