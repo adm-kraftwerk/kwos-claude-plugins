@@ -6914,9 +6914,6 @@ var require_dist = __commonJS({
   }
 });
 
-// server/index.js
-import { fileURLToPath } from "node:url";
-
 // node_modules/zod/v4/core/core.js
 var _a;
 // @__NO_SIDE_EFFECTS__
@@ -15640,6 +15637,21 @@ async function refreshSessionId() {
   return true;
 }
 
+// server/is-main.js
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+function realPath(p, resolve) {
+  try {
+    return resolve(p);
+  } catch {
+    return p;
+  }
+}
+function isMainModule(moduleUrl, { argv = process.argv, resolve = realpathSync.native } = {}) {
+  if (!argv || !argv[1]) return false;
+  return realPath(fileURLToPath(moduleUrl), resolve) === realPath(argv[1], resolve);
+}
+
 // server/auth.js
 import { spawn } from "node:child_process";
 import { existsSync as existsSync2 } from "node:fs";
@@ -17248,7 +17260,7 @@ var TOOLS = [
   ...CODE_TOOLS
 ];
 var server = new Server(
-  { name: "kwos-session-bus", version: "0.6.0" },
+  { name: "kwos-session-bus", version: "0.6.1" },
   { capabilities: { tools: {} } }
 );
 var REMOTE_ONLY_TOOLS = /* @__PURE__ */ new Set(["ask_remote"]);
@@ -17472,8 +17484,7 @@ async function main() {
   }, config2.sessionIdCheckMs);
   rebindTimer.unref();
 }
-var isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   main().catch((err) => {
     log.error("Unerwarteter Fehler beim Start.", { error: String(err) });
     process.exit(1);
