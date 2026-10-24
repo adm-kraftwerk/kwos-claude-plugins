@@ -33,11 +33,21 @@ export function cursorsPath(env = process.env) {
   return join(base, CURSOR_FILE);
 }
 
-/** The last seq this session printed for that channel, or null when it never saw one. */
+/**
+ * The last seq this session printed for that channel, or null when it never saw one.
+ *
+ * MIGRATION. Cursors were kept per CHANNEL before they became per session, and the file stays on
+ * disk across the update. Without the fallback every session would start at zero and replay the
+ * whole protocol once -- the very thing this file exists to prevent. The old channel-only key is
+ * therefore read exactly once, as this session's starting point; `rememberCursor` then writes the
+ * session key as usual and the old one is never consulted again (it stays until the bound drops it).
+ */
 export function readCursor(collabId, sessionId = null, path = cursorsPath()) {
   const all = readAll(path);
   const seq = Number(all[cursorKey(collabId, sessionId)]);
-  return Number.isFinite(seq) && seq > 0 ? seq : null;
+  if (Number.isFinite(seq) && seq > 0) return seq;
+  const legacy = Number(all[String(collabId)]);
+  return Number.isFinite(legacy) && legacy > 0 ? legacy : null;
 }
 
 /**

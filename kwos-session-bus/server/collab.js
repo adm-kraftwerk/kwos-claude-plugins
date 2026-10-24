@@ -7,15 +7,34 @@
 // That question is answered from the relay, never locally: joining is a fact on the server (the
 // member row carries the session id), and a local guess would let a session talk into a channel it
 // was removed from.
-import { config } from "./config.js";
+import { config, sessionCwd } from "./config.js";
 import { getAccessToken } from "./auth.js";
 import { rememberOwnHumanLine } from "./ownHumanLines.js";
 import { call } from "./relay-client.js";
+import { repoInfo } from "./codeGit.js";
 
 /** GET /v1/collabs -> every collab this login is a member of (joined or invited). */
 export async function listCollabs() {
   const { data } = await call("/v1/collabs");
   return Array.isArray(data?.collabs) ? data.collabs : [];
+}
+
+/**
+ * The repository and branch of the session's working directory, or null.
+ *
+ * The relay stores an agent with the project it works in (`repo` is `repoKey()`, `host/path`), so a
+ * person's two sessions can be told apart. A directory without git, or a repository without an
+ * origin, is a normal case (a channel outside code mode) and must never cost the join: the answer
+ * is simply null and the accept leaves both fields out.
+ */
+async function sessionRepo(cwd) {
+  if (!cwd) return null;
+  try {
+    const info = await repoInfo(cwd);
+    return info.repo ? { repo: info.repo, branch: info.branch } : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -25,11 +44,22 @@ export async function listCollabs() {
  * to the caller (`ownedSession`), and nobody else knows this session's Claude Code id. So the
  * session joins itself, either when its human chooses it in an interface (which passes the id in)
  * or at start, when the session was opened FROM an invitation (`KWOS_COLLAB`, s. config.js).
+ *
+ * The agent also says WHICH REPOSITORY it works in: a person may be in the channel with a second
+ * session on another project, and the repository is what tells the two apart afterwards (the
+ * sender mark and the code exchange both read it). `cwd` is the seam for tests; the session's own
+ * working directory is the default.
  */
-export async function acceptCollab(collabId, { mode } = {}) {
+export async function acceptCollab(collabId, { mode, cwd = sessionCwd } = {}) {
+  const where = await sessionRepo(cwd);
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/accept`, {
     method: "POST",
-    body: { session_id: config.sessionId, ...(mode ? { mode } : {}) },
+    body: {
+      session_id: config.sessionId,
+      ...(where?.repo ? { repo: where.repo } : {}),
+      ...(where?.branch ? { branch: where.branch } : {}),
+      ...(mode ? { mode } : {}),
+    },
   });
   return data ?? {};
 }
@@ -69,12 +99,27 @@ export async function myJoinedCollabs() {
     && c.members.some((m) => m.status === "joined" && memberHasSession(m, config.sessionId)));
 }
 
-/** Is this member in the channel with exactly this session? Falls back to the old single column. */
+/**
+ * Is this member in the channel with exactly this session? Prefers `agents`, then the older
+ * `sessions`, then the old single column (the session that bound last).
+ */
 export function memberHasSession(member, sessionId) {
   if (!member || !sessionId) return false;
-  const sessions = Array.isArray(member.sessions) ? member.sessions : null;
-  if (sessions) return sessions.some((s) => s?.session_id === sessionId);
+  if (Array.isArray(member.agents)) return member.agents.some((a) => a?.session_id === sessionId);
+  if (Array.isArray(member.sessions)) return member.sessions.some((s) => s?.session_id === sessionId);
   return member.session_id === sessionId;
+}
+
+/**
+ * The code-state entry of ONE address (`GET /code` lists one entry per session), or null.
+ *
+ * No fallback to another session of the same person: two sessions may be on two projects, and
+ * taking the sibling's entry would hand this session a foreign plane, head and mandate. A session
+ * that is not on a plane is simply not in code mode.
+ */
+export function codeEntryFor(entries, subject, sessionId) {
+  if (!subject || !sessionId) return null;
+  return (entries || []).find((m) => m?.subject === subject && m?.session_id === sessionId) ?? null;
 }
 
 /** The invitations addressed to this login that nobody has answered yet. */

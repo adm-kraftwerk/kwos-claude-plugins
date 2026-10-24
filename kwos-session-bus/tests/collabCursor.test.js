@@ -39,6 +39,22 @@ test("zwei Sitzungen lesen denselben Kanal unabhaengig", () => {
   assert.equal(readCursor("c-1", "s-2", two), 3);
 });
 
+test("migration: an old channel-only cursor counts once for the session -- no backlog replay", () => {
+  // Before cursors were kept per session, the file had one key per channel. After the update the
+  // session key is missing; without the fallback every session would start at zero and replay the
+  // whole backlog once -- exactly what this store exists to prevent.
+  const old = join(dir, "migration.json");
+  writeFileSync(old, JSON.stringify({ "c-1": 17 }));
+  assert.equal(readCursor("c-1", "s-new", old), 17);
+  rememberCursor("c-1", 23, "s-new", old);
+  assert.equal(readCursor("c-1", "s-new", old), 23);
+  // A different session starts at the old channel stand as well -- it never read the channel.
+  assert.equal(readCursor("c-1", "s-second", old), 17);
+  // And the session key wins once it exists, even when the old one is higher.
+  writeFileSync(old, JSON.stringify({ "c-1": 99, "s-new|c-1": 23 }));
+  assert.equal(readCursor("c-1", "s-new", old), 23);
+});
+
 test("unlesbare Werte werden nicht uebernommen", () => {
   rememberCursor("c-2", 0, "s-1", path);
   rememberCursor("c-2", Number.NaN, "s-1", path);

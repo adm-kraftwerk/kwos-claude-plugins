@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { installFetchMock } from "./helpers/fetch-mock.js";
+import { gitText } from "../server/codeGit.js";
 
 // kwcollab-Client (WI 11482928): welche Session in welchem Kanal ist, und was ein 409 bedeutet.
 //
@@ -331,6 +335,75 @@ test("acceptCollab: schickt die EIGENE session_id mit", async () => {
     assert.equal(body.session_id, config.sessionId);
     assert.match(mock.calls[0].url, /\/v1\/collabs\/7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c\/accept$/);
   } finally { mock.restore(); }
+});
+
+/** A throwaway repository; `remote` makes it look like a clone of that origin. */
+async function tempRepo(remote = null) {
+  const dir = mkdtempSync(join(tmpdir(), "kwcollab-accept-"));
+  await gitText(dir, ["init", "-q", "-b", "main"]);
+  writeFileSync(join(dir, "a.txt"), "a\n");
+  await gitText(dir, ["add", "-A"]);
+  await gitText(dir, ["-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "-m", "base"]);
+  if (remote) await gitText(dir, ["remote", "add", "origin", remote]);
+  return dir;
+}
+
+test("acceptCollab: the agent names the repository it works in", async () => {
+  const dir = await tempRepo("https://git.example.com/team/alpha.git");
+  const mock = installFetchMock(() => jsonResponse({ me: { status: "joined" } }, 200));
+  try {
+    await collab.acceptCollab("c-1", { cwd: dir });
+    const body = JSON.parse(mock.calls[0].init.body);
+    // repoKey form: host/path, no scheme, no `.git` -- two clone spellings are one repository.
+    assert.equal(body.repo, "git.example.com/team/alpha");
+    assert.equal(body.branch, "main");
+  } finally { mock.restore(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("acceptCollab: without a git repository or an origin both fields are absent -- the join never fails for it", async () => {
+  const plain = mkdtempSync(join(tmpdir(), "kwcollab-plain-"));
+  const noOrigin = await tempRepo();
+  const mock = installFetchMock(() => jsonResponse({ me: { status: "joined" } }, 200));
+  try {
+    await collab.acceptCollab("c-1", { cwd: plain });
+    let body = JSON.parse(mock.calls[0].init.body);
+    assert.equal("repo" in body, false);
+    assert.equal("branch" in body, false);
+    assert.equal(body.session_id, config.sessionId, "the join itself still goes out");
+
+    await collab.acceptCollab("c-1", { cwd: noOrigin });
+    body = JSON.parse(mock.calls[1].init.body);
+    assert.equal("repo" in body, false);
+    assert.equal("branch" in body, false);
+  } finally {
+    mock.restore();
+    rmSync(plain, { recursive: true, force: true });
+    rmSync(noOrigin, { recursive: true, force: true });
+  }
+});
+
+test("memberHasSession: agents first, then sessions, then the old single column", () => {
+  const member = {
+    subject: "u-mara",
+    session_id: "s-last",
+    sessions: [{ session_id: "s-old" }],
+    agents: [{ session_id: "s-agent" }],
+  };
+  assert.equal(collab.memberHasSession(member, "s-agent"), true);
+  assert.equal(collab.memberHasSession(member, "s-old"), false, "agents wins when present");
+  assert.equal(collab.memberHasSession(member, "s-last"), false);
+  assert.equal(collab.memberHasSession({ subject: "u", sessions: [{ session_id: "s-old" }] }, "s-old"), true);
+  assert.equal(collab.memberHasSession({ subject: "u", session_id: "s-last" }, "s-last"), true);
+});
+
+test("codeEntryFor: this address, never the sibling of the same person", () => {
+  const entries = [
+    { subject: "me", session_id: "s-1", mandate: { wake: false } },
+    { subject: "me", session_id: "s-2", mandate: { wake: true } },
+  ];
+  assert.equal(collab.codeEntryFor(entries, "me", "s-1").mandate.wake, false);
+  assert.equal(collab.codeEntryFor(entries, "me", "s-2").mandate.wake, true);
+  assert.equal(collab.codeEntryFor(entries, "me", "s-unknown"), null, "no fallback to the sibling");
 });
 
 test("acceptCollab: ein fehlendes Sichtrecht kommt als Satz zurueck, nicht als leerer Erfolg", async () => {

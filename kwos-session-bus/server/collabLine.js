@@ -170,22 +170,40 @@ export function collabClosedLine(collabId) {
 }
 
 /**
+ * The last path segment of a repository key (`host/path`, s. codeGit.js::repoKey), or null.
+ * "Christian @bc" says more than a hash alone: it names the project the speaking agent works in.
+ */
+function repoShort(repo) {
+  const segment = String(repo || "").split("/").filter(Boolean).pop();
+  return segment || null;
+}
+
+/**
  * The readable name of the sender: the display name once the person has joined (XID `name`), the
  * login before that. A channel line that shows an opaque login is legible only to machines.
  *
- * WHEN THE PERSON IS IN TWICE, THE ADDRESS IS NAMED (WI 11551159): the same human with a second
- * session is two working states, and a line that says only "Steffen" leaves the reader guessing
- * which one spoke. The mark is the short form of the session id -- short because it sits in a head
- * with a hard budget, and marked as an address by the `#`.
+ * WHEN THE PERSON IS IN TWICE, THE ADDRESS IS NAMED: the same human with a second session is two
+ * working states, and a line that says only "Steffen" leaves the reader guessing which one spoke.
+ * An agent knows its repository since it joined (the relay stores it on the agent), so the mark is
+ * `Name @<repo-short> #<8 chars>` -- the project says more than the hash, and the hash keeps the
+ * address unambiguous when both sessions work in the same project. Without a known repository the
+ * mark stays the shorter `Name #<8 chars>`. The mark is ASCII on purpose: the prompt fragment that
+ * explains it to the reader is byte-gated, so no separator may need a non-ASCII character.
  */
 export function senderName(message, members) {
   const subject = message?.from_subject;
   if (subject === "relay") return "kwcollab";
   const m = (members || []).find((x) => x.subject === subject);
   const name = m?.display_name || subject || "?";
+  const agents = Array.isArray(m?.agents) ? m.agents : [];
   const sessions = Array.isArray(m?.sessions) ? m.sessions : [];
-  if (sessions.length > 1 && message?.from_session) {
-    return `${name} #${String(message.from_session).slice(0, 8)}`;
+  const addresses = agents.length > 0 ? agents : sessions;
+  if (addresses.length > 1 && message?.from_session) {
+    const short = `#${String(message.from_session).slice(0, 8)}`;
+    const repo = agents.length > 0
+      ? repoShort(agents.find((a) => a?.session_id === message.from_session)?.repo)
+      : null;
+    return repo ? `${name} @${repo} ${short}` : `${name} ${short}`;
   }
   return name;
 }

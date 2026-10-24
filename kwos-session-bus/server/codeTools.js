@@ -195,12 +195,16 @@ export async function handleCodeTool(name, args = {}) {
   switch (name) {
     case "collab_code_start": {
       const ctx = await ctxOrThrow(args, { needActive: false });
-      const r = await flow.start(relay(), { cwd: cwd(), collabId: ctx.collabId, me: ctx.me, mandate: args.mandate || {} });
+      const r = await flow.start(relay(), {
+        cwd: cwd(), collabId: ctx.collabId, me: ctx.me, mandate: args.mandate || {}, sessionId: ctx.sessionId,
+      });
       return text(`Code-Austausch an: ${r.repo} ${r.branch}, Basis ${r.base.slice(0, 7)}. Die anderen treten mit collab_code_join bei.`);
     }
     case "collab_code_join": {
       const ctx = await ctxOrThrow(args, { needActive: false });
-      const r = await flow.join(relay(), { cwd: cwd(), collabId: ctx.collabId, me: ctx.me, mandate: args.mandate || {} });
+      const r = await flow.join(relay(), {
+        cwd: cwd(), collabId: ctx.collabId, me: ctx.me, mandate: args.mandate || {}, sessionId: ctx.sessionId,
+      });
       const s = await flow.sync(relay(), { cwd: cwd(), collabId: ctx.collabId, me: ctx.me, mandate: r.mandate, sessionId: ctx.sessionId, fetchLive: fetchLive() });
       return text(`Beigetreten (${r.repo} ${r.branch}, Basis ${r.base.slice(0, 7)}, Mandat ${r.mandate.apply}).\n${reportText(s.report, ctx.names)}${await memoryText(ctx)}`);
     }
@@ -210,7 +214,7 @@ export async function handleCodeTool(name, args = {}) {
     }
     case "collab_code_status": {
       const ctx = await ctxOrThrow(args, { needActive: false });
-      return json(await flow.status(ctx.relay, { cwd: cwd(), collabId: ctx.collabId, me: ctx.me }));
+      return json(await flow.status(ctx.relay, { cwd: cwd(), collabId: ctx.collabId, me: ctx.me, sessionId: ctx.sessionId }));
     }
     case "collab_code_sync": {
       const ctx = await ctxOrThrow(args);

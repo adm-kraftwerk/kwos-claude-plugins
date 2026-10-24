@@ -229,6 +229,47 @@ test("senderName: der Anzeigename, sonst der Login, sonst der Systemname", () =>
   assert.equal(senderName({}, members), "?");
 });
 
+test("senderName: two agents of one person carry repository and address", () => {
+  const members = [{
+    subject: "u-steffen", display_name: "Christian",
+    agents: [
+      { session_id: "aaaaaaaa-1111-4111-8111-111111111111", repo: "git.example.com/team/bc" },
+      { session_id: "bbbbbbbb-2222-4222-8222-222222222222", repo: "git.example.com/team/other" },
+    ],
+  }];
+  assert.equal(
+    senderName({ from_subject: "u-steffen", from_session: "aaaaaaaa-1111-4111-8111-111111111111" }, members),
+    "Christian @bc #aaaaaaaa",
+  );
+  // The repository comes from the SPEAKING agent, not from the first one in the list.
+  assert.equal(
+    senderName({ from_subject: "u-steffen", from_session: "bbbbbbbb-2222-4222-8222-222222222222" }, members),
+    "Christian @other #bbbbbbbb",
+  );
+  // An address the member's agents do not name (an older relay, a race) keeps the short mark.
+  assert.equal(
+    senderName({ from_subject: "u-steffen", from_session: "cccccccc-3333-4333-8333-333333333333" }, members),
+    "Christian #cccccccc",
+  );
+});
+
+test("senderName: a single agent keeps the plain name, agents beats sessions", () => {
+  const one = [{ subject: "u-mara", display_name: "Mara", agents: [{ session_id: "s-1", repo: "h/one" }] }];
+  assert.equal(senderName({ from_subject: "u-mara", from_session: "s-1" }, one), "Mara");
+
+  // Old relay shape: `sessions` without repositories.
+  const old = [{ subject: "u-mara", display_name: "Mara", sessions: [{ session_id: "s-1" }, { session_id: "s-2" }] }];
+  assert.equal(senderName({ from_subject: "u-mara", from_session: "s-2" }, old), "Mara #s-2");
+
+  // Both shapes: `agents` is the newer truth, even when it names only one address.
+  const both = [{
+    subject: "u-mara", display_name: "Mara",
+    agents: [{ session_id: "s-1", repo: "h/one" }],
+    sessions: [{ session_id: "s-1" }, { session_id: "s-2" }],
+  }];
+  assert.equal(senderName({ from_subject: "u-mara", from_session: "s-2" }, both), "Mara");
+});
+
 // ── Die Naht Frame -> Zeile: hier entscheidet sich, was die Session ueberhaupt zu sehen bekommt ──
 test("frameToLine: eine fremde Nachricht wird zu einer Kanal-Zeile mit ihrer seq", () => {
   const raw = JSON.stringify({

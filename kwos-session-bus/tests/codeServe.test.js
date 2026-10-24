@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitText } from "../server/codeGit.js";
-import { answerServeFrame, uploadPackConfig } from "../server/codeServe.js";
+import { answerServeFrame, uploadPackConfig, gitFetchUrl } from "../server/codeServe.js";
 import { parseEvent } from "../server/sse-receiver.js";
 
 const COLLAB = "0c5d9b7e-1a2b-4c3d-8e4f-5a6b7c8d9e0f";
@@ -91,6 +91,20 @@ test("die Konfiguration versteckt alles und oeffnet nur den eigenen out-Ref", ()
   assert.ok(cfg.includes("uploadpack.allowAnySHA1InWant=false"));
   // The exception must come AFTER the blanket rule: git applies the last matching one.
   assert.ok(cfg.indexOf("uploadpack.hideRefs=refs/") < cfg.indexOf(`uploadpack.hideRefs=!refs/kwcollab/${COLLAB}/out`));
+});
+
+test("gitFetchUrl names the TARGET session -- otherwise the relay guesses the newest address", () => {
+  assert.equal(
+    gitFetchUrl("https://relay", COLLAB, { subject: "kai", sessionId: "s-target" }),
+    `https://relay/v1/collabs/${COLLAB}/git/kai?session=s-target`,
+  );
+  // Without a target session the old URL stays -- an older relay answers the person's newest one.
+  assert.equal(gitFetchUrl("https://relay", COLLAB, "kai"), `https://relay/v1/collabs/${COLLAB}/git/kai`);
+  // relay-side field spelling is accepted too
+  assert.equal(
+    gitFetchUrl("https://relay", COLLAB, { subject: "kai", session_id: "s-target" }),
+    `https://relay/v1/collabs/${COLLAB}/git/kai?session=s-target`,
+  );
 });
 
 test("parseEvent liefert den Ereignisnamen mit", () => {

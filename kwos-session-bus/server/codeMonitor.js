@@ -13,6 +13,16 @@ import { getAccessToken } from "./auth.js";
 import { log } from "./log.js";
 import { runSseReceiver } from "./sse-receiver.js";
 import { startServing, relayAdapter } from "./codeServe.js";
+import { codeEntryFor } from "./collab.js";
+
+/**
+ * May an incoming code line wake THIS address? The mandate of the own entry decides, and an entry
+ * that does not name this session does not speak for it. Exported for the test: the serving path
+ * itself needs a stream.
+ */
+export function wakeFromCode(code, me, sessionId) {
+  return codeEntryFor(code?.members, me, sessionId)?.mandate?.wake !== false;
+}
 
 function localState(cwd) {
   const r = spawnSync("git", ["rev-parse", "--absolute-git-dir"], { cwd, encoding: "utf8", windowsHide: true });
@@ -37,9 +47,13 @@ export function codeServing({ cwd }) {
     const st = localState(cwd);
     if (!st || st.collab !== collabId) { drop(collabId); return; }
     try {
-      const code = await relay.get(`/v1/collabs/${encodeURIComponent(collabId)}/code`);
-      const mine = (code.members || []).find((m) => m.subject === st.me);
-      entry.wake = mine?.mandate?.wake !== false;
+      // Read the mandate of THIS address: `?session=` makes the relay answer with this session's
+      // plane, and the entry must match both subject and session. Falling back to another session
+      // of the person would take that session's `wake` -- two boxes, two different answers.
+      const code = await relay.get(
+        `/v1/collabs/${encodeURIComponent(collabId)}/code?session=${encodeURIComponent(config.sessionId)}`
+      );
+      entry.wake = wakeFromCode(code, st.me, config.sessionId);
     } catch (err) {
       log.error("Code-Status nicht abrufbar.", { collabId, error: String(err) });
     }
@@ -48,7 +62,8 @@ export function codeServing({ cwd }) {
     serving.set(collabId, controller);
     log.info("Code-Austausch: stelle Stände bereit.", { collabId });
     startServing({
-      relayUrl: config.relayUrl, getToken: getAccessToken, collabId, top: st.top, signal: controller.signal,
+      relayUrl: config.relayUrl, getToken: getAccessToken, collabId, sessionId: config.sessionId,
+      top: st.top, signal: controller.signal,
       runSse: (onMessage, opts) => runSseReceiver(onMessage, opts),
       onError: (e) => log.error("Bereitstellen fehlgeschlagen.", { collabId, error: String(e) }),
     }).catch((err) => {

@@ -22,7 +22,7 @@ export function relay() {
 }
 
 export function fetchLive() {
-  return makeFetchLive({ relayUrl: config.relayUrl, getToken: getAccessToken });
+  return makeFetchLive({ relayUrl: config.relayUrl, getToken: getAccessToken, sessionId: config.sessionId });
 }
 
 /**
@@ -46,11 +46,11 @@ export async function codeContext({ cwd = process.cwd(), collabId } = {}) {
   try { state = await r.get(`/v1/collabs/${encodeURIComponent(c.collab_id)}/code?session=${encodeURIComponent(config.sessionId)}`); } catch (e) {
     return { active: false, reason: e.message };
   }
-  // The code state belongs to THIS address (WI 11551159): `state.members` carries one entry per
-  // session, and two sessions of one person may be on two projects. Matching by subject alone
-  // handed a session its sibling's plane, mandate and head.
-  const meCode = (state.members || []).find((m) => m.subject === mine.subject && m.session_id === config.sessionId)
-    || (state.members || []).find((m) => m.subject === mine.subject);
+  // The code state belongs to THIS address: `state.members` carries one entry per session, and two
+  // sessions of one person may be on two projects. Matching by subject alone handed a session its
+  // sibling's plane, mandate and head. There is deliberately no fallback: an address that is not on
+  // a plane is not in code mode, even when the person's other session is.
+  const meCode = collab.codeEntryFor(state.members, mine.subject, config.sessionId);
   return {
     active: Boolean(state.code && meCode && local && local.collab === c.collab_id && local.base === state.code.base),
     joined: Boolean(meCode),
@@ -142,7 +142,9 @@ export async function precheck({ cwd, path }) {
   const info = await repoInfo(cwd);
   const rel = relativeTo(info.top, path);
   if (!rel) return null;
-  return editBlocker(ctx.state.members, { me: ctx.me, integrated: ctx.local?.integrated, rel, names: ctx.names, bundles: ctx.state.bundles });
+  return editBlocker(ctx.state.members, {
+    me: ctx.me, sessionId: ctx.sessionId, integrated: ctx.local?.integrated, rel, names: ctx.names, bundles: ctx.state.bundles,
+  });
 }
 
 /**
@@ -155,12 +157,16 @@ export async function precheck({ cwd, path }) {
  * on every turn with no way out (review finding 2026-10-20). Such a state does not hold the edit;
  * the next sync takes it in once it is reachable, and a conflict then follows the normal rule.
  */
-export function editBlocker(members, { me, integrated = {}, rel, names = {}, bundles = [] }) {
+export function editBlocker(members, { me, sessionId = null, integrated = {}, rel, names = {}, bundles = [] }) {
+  const addr = (m) => (m?.session_id ? `${m.subject}#${m.session_id}` : m?.subject);
+  // This session's own state never blocks it; a SIBLING of the same person does (the same rule as
+  // the sync loop). A legacy entry without a session id is the person's one address.
+  const isOwn = (m) => m.subject === me && (m.session_id == null ? true : m.session_id === sessionId);
   for (const m of members || []) {
-    if (m.subject === me || !m.head) continue;
-    if (integrated?.[m.subject] === m.head) continue;
+    if (isOwn(m) || !m.head) continue;
+    if (integrated?.[addr(m)] === m.head) continue;
     if (m.head_paths !== null && !m.head_paths?.includes(rel)) continue;
-    const reachable = m.online || (bundles || []).some((b) => b.member === m.subject && b.head === m.head);
+    const reachable = m.online || (bundles || []).some((b) => (b.member ?? b.member_subject) === m.subject && b.head === m.head);
     if (!reachable) continue;
     return `${names[m.subject] || m.subject} hat ${rel} in einem Stand geändert, den diese Sitzung noch nicht hat. Erst collab_code_sync, dann bearbeiten.`;
   }
