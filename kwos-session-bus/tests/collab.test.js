@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { installFetchMock } from "./helpers/fetch-mock.js";
+import { gitText } from "../server/codeGit.js";
 
 // kwcollab-Client (WI 11482928): welche Session in welchem Kanal ist, und was ein 409 bedeutet.
 //
@@ -9,6 +13,11 @@ process.env.KWOS_XID_ACCESS_TOKEN = "test-token";
 process.env.KWOS_CLIENT_ID = "test-client";
 const { config } = await import("../server/config.js");
 const collab = await import("../server/collab.js");
+
+// The session's own id, as the launcher wrote it. Explicit on purpose: membership is decided per
+// ADDRESS since WI 11551159, and a session without an id is in no channel -- the old test only
+// passed because both sides were `undefined`.
+config.sessionId = config.sessionId ?? "sess-self";
 
 const jsonResponse = (body, status = 200) =>
   Promise.resolve({
@@ -328,6 +337,75 @@ test("acceptCollab: schickt die EIGENE session_id mit", async () => {
   } finally { mock.restore(); }
 });
 
+/** A throwaway repository; `remote` makes it look like a clone of that origin. */
+async function tempRepo(remote = null) {
+  const dir = mkdtempSync(join(tmpdir(), "kwcollab-accept-"));
+  await gitText(dir, ["init", "-q", "-b", "main"]);
+  writeFileSync(join(dir, "a.txt"), "a\n");
+  await gitText(dir, ["add", "-A"]);
+  await gitText(dir, ["-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "-m", "base"]);
+  if (remote) await gitText(dir, ["remote", "add", "origin", remote]);
+  return dir;
+}
+
+test("acceptCollab: the agent names the repository it works in", async () => {
+  const dir = await tempRepo("https://git.example.com/team/alpha.git");
+  const mock = installFetchMock(() => jsonResponse({ me: { status: "joined" } }, 200));
+  try {
+    await collab.acceptCollab("c-1", { cwd: dir });
+    const body = JSON.parse(mock.calls[0].init.body);
+    // repoKey form: host/path, no scheme, no `.git` -- two clone spellings are one repository.
+    assert.equal(body.repo, "git.example.com/team/alpha");
+    assert.equal(body.branch, "main");
+  } finally { mock.restore(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("acceptCollab: without a git repository or an origin both fields are absent -- the join never fails for it", async () => {
+  const plain = mkdtempSync(join(tmpdir(), "kwcollab-plain-"));
+  const noOrigin = await tempRepo();
+  const mock = installFetchMock(() => jsonResponse({ me: { status: "joined" } }, 200));
+  try {
+    await collab.acceptCollab("c-1", { cwd: plain });
+    let body = JSON.parse(mock.calls[0].init.body);
+    assert.equal("repo" in body, false);
+    assert.equal("branch" in body, false);
+    assert.equal(body.session_id, config.sessionId, "the join itself still goes out");
+
+    await collab.acceptCollab("c-1", { cwd: noOrigin });
+    body = JSON.parse(mock.calls[1].init.body);
+    assert.equal("repo" in body, false);
+    assert.equal("branch" in body, false);
+  } finally {
+    mock.restore();
+    rmSync(plain, { recursive: true, force: true });
+    rmSync(noOrigin, { recursive: true, force: true });
+  }
+});
+
+test("memberHasSession: agents first, then sessions, then the old single column", () => {
+  const member = {
+    subject: "u-mara",
+    session_id: "s-last",
+    sessions: [{ session_id: "s-old" }],
+    agents: [{ session_id: "s-agent" }],
+  };
+  assert.equal(collab.memberHasSession(member, "s-agent"), true);
+  assert.equal(collab.memberHasSession(member, "s-old"), false, "agents wins when present");
+  assert.equal(collab.memberHasSession(member, "s-last"), false);
+  assert.equal(collab.memberHasSession({ subject: "u", sessions: [{ session_id: "s-old" }] }, "s-old"), true);
+  assert.equal(collab.memberHasSession({ subject: "u", session_id: "s-last" }, "s-last"), true);
+});
+
+test("codeEntryFor: this address, never the sibling of the same person", () => {
+  const entries = [
+    { subject: "me", session_id: "s-1", mandate: { wake: false } },
+    { subject: "me", session_id: "s-2", mandate: { wake: true } },
+  ];
+  assert.equal(collab.codeEntryFor(entries, "me", "s-1").mandate.wake, false);
+  assert.equal(collab.codeEntryFor(entries, "me", "s-2").mandate.wake, true);
+  assert.equal(collab.codeEntryFor(entries, "me", "s-unknown"), null, "no fallback to the sibling");
+});
+
 test("acceptCollab: ein fehlendes Sichtrecht kommt als Satz zurueck, nicht als leerer Erfolg", async () => {
   const mock = installFetchMock(() => jsonResponse({ error: "you cannot see this workitem" }, 403));
   try {
@@ -344,11 +422,14 @@ test("declineCollab: POST ohne Rumpf auf die decline-Route", async () => {
   } finally { mock.restore(); }
 });
 
-test("leaveCollab: ohne Zusammenfassung kein Rumpf-Feld, mit ihr schon", async () => {
+test("leaveCollab: die ADRESSE geht, nicht die ganze Person -- ohne Zusammenfassung kein summary-Feld", async () => {
   const mock = installFetchMock(() => jsonResponse({ left: true }, 200));
   try {
     await collab.leaveCollab("c-1");
-    assert.equal(mock.calls[0].init.body, undefined);
+    // The session id rides along since WI 11551159: the relay drops that address and leaves the
+    // person (and a second box of theirs) in the channel.
+    assert.equal(JSON.parse(mock.calls[0].init.body).session_id, config.sessionId);
+    assert.equal(JSON.parse(mock.calls[0].init.body).summary, undefined);
     await collab.leaveCollab("c-1", "Befund steht im Workitem.");
     assert.equal(JSON.parse(mock.calls[1].init.body).summary, "Befund steht im Workitem.");
   } finally { mock.restore(); }
@@ -398,9 +479,13 @@ test("nach einem Session-Wechsel nimmt der Monitor seine Kanaele neu an", async 
   const tail = src.slice(start, src.indexOf("}, config.sessionIdCheckMs)"));
   const capture = tail.indexOf("const was = ");
   const close = tail.indexOf("closeAll()");
-  const accept = tail.indexOf("collab.acceptCollab(id)");
+  // The re-accept names the id this process HAD (`replaces`): the relay moves that agent's code
+  // state to the new id and removes the old row instead of keeping a ghost agent.
+  const accept = tail.indexOf("collab.acceptCollab(id, { replaces: replaced })");
   assert.ok(capture > 0 && close > capture, "die Kanal-IDs muessen VOR closeAll() gemerkt werden");
   assert.ok(accept > close, "das erneute accept gehoert hinter closeAll()");
+  assert.ok(tail.indexOf("const replaced = boundId;") < tail.indexOf("boundId = config.sessionId;"),
+    "die alte ID muss gemerkt werden, BEVOR boundId ueberschrieben wird");
   // Und nur die eigenen Kanaele: niemals "alles, wo mein Login drin ist" (ein zweites Fenster kann
   // im selben Kanal sein -- ein accept von hier zoege ihm die Mitgliedschaft weg).
   assert.match(tail, /for \(const id of was\)/, "erneut angenommen wird nur, was dieser Monitor offen hatte");

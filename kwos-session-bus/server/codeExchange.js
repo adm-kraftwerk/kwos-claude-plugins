@@ -21,6 +21,43 @@ import {
 
 const enc = encodeURIComponent;
 
+/**
+ * The stable name of ONE address in the code state: `subject#session` when the entry carries a
+ * session, else the subject. Two sessions of one person are two working states and must not
+ * collide in local state (integrated map, conflicts list) or in the event payloads that name them.
+ */
+const memberAddr = (m) => (m?.session_id ? `${m.subject}#${m.session_id}` : m?.subject);
+
+/** Is this entry THIS session? A legacy entry without a session id is the person's one address. */
+function isOwnAddress(m, me, sessionId) {
+  if (!m || m.subject !== me) return false;
+  if (m.session_id == null) return true;
+  return m.session_id === sessionId;
+}
+
+/** The stable name of a bundle's owner: `subject#session`, or the subject for a legacy bundle. */
+const bundleAddr = (b) => {
+  const subject = b?.member_subject ?? b?.member;
+  return b?.member_session ? `${subject}#${b.member_session}` : subject;
+};
+
+function bundlesByAddress(bundles) {
+  const map = new Map();
+  for (const b of bundles || []) {
+    const key = bundleAddr(b);
+    if (key) map.set(key, b);
+  }
+  return map;
+}
+
+/**
+ * The bundle of THIS address. A bundle without a session is the person's default one (a row from
+ * before code state moved per session); it is only taken when no bundle for the address exists.
+ */
+function bundleFor(map, m) {
+  return map.get(memberAddr(m)) ?? map.get(m?.subject) ?? null;
+}
+
 /** Everything the flow needs to know about the local side. */
 export async function localContext(cwd, collabId) {
   await checkGitVersion(cwd);
@@ -33,8 +70,28 @@ export async function localContext(cwd, collabId) {
   return { ...info, state };
 }
 
-async function codeState(relay, collabId) {
-  return relay.get(`/v1/collabs/${enc(collabId)}/code`);
+/**
+ * The channel's code state AS THIS AGENT SEES IT. The session goes along, so `code` and `members`
+ * describe this agent's own plane -- without it the relay answers for the person's last-bound
+ * agent, which may be on another repository (two agents of one person, STREAM and BC).
+ */
+async function codeState(relay, collabId, sessionId = null) {
+  const q = sessionId ? `?session=${enc(sessionId)}` : "";
+  return relay.get(`/v1/collabs/${enc(collabId)}/code${q}`);
+}
+
+/**
+ * The plane this worktree belongs to: same repository and, when the channel has several planes on
+ * it, the same branch. Null when the channel has none for this project yet.
+ */
+export function planeForWorktree(cur, repo, branch) {
+  const planes = Array.isArray(cur?.planes) ? cur.planes : [];
+  const forRepo = planes.filter((p) => p.repo === repo);
+  if (forRepo.length === 0) {
+    // A relay from before planes answers only `code` -- one project per channel.
+    return cur?.code && cur.code.repo === repo ? { ...cur.code, id: null } : null;
+  }
+  return forRepo.find((p) => p.branch === branch) || (forRepo.length === 1 ? forRepo[0] : null);
 }
 
 // The base must be in the local object store before anything can build on it.
@@ -55,7 +112,7 @@ function freshState(collab, me, base, branch) {
  * Maintainer: code mode on. The base is the current HEAD, which must be on origin already (the
  * others fetch it from there) -- a local commit as base would make every bundle unusable for them.
  */
-export async function start(relay, { cwd, collabId, me, mandate }) {
+export async function start(relay, { cwd, collabId, me, mandate, sessionId }) {
   const ctx = await localContext(cwd, collabId);
   if (!ctx.branch) throw new Error("HEAD ist kein Branch -- der Code-Modus arbeitet auf einem Branch.");
   const r = await git(ctx.top, ["fetch", "-q", "--no-tags", "origin", ctx.branch]);
@@ -64,7 +121,9 @@ export async function start(relay, { cwd, collabId, me, mandate }) {
   if (!(await isAncestor(ctx.top, ctx.head, remoteHead))) {
     throw new Error(`HEAD ${ctx.head.slice(0, 7)} liegt nicht auf origin/${ctx.branch}. Erst pushen, dann den Code-Modus starten.`);
   }
-  const res = await relay.post(`/v1/collabs/${enc(collabId)}/code`, { repo: ctx.repo, branch: ctx.branch, base: ctx.head, mandate });
+  const res = await relay.post(`/v1/collabs/${enc(collabId)}/code`, {
+    repo: ctx.repo, branch: ctx.branch, base: ctx.head, mandate, ...(sessionId ? { session_id: sessionId } : {}),
+  });
   const base = res.code.base;
   await ensureBase(ctx.top, ctx.branch, base);
   writeState(ctx.gitDir, ctx.state?.base === base ? ctx.state : freshState(collabId, me, base, ctx.branch));
@@ -72,12 +131,22 @@ export async function start(relay, { cwd, collabId, me, mandate }) {
 }
 
 /** Member: enter code mode. Same repository, base fetched from origin, then everyone's state in. */
-export async function join(relay, { cwd, collabId, me, mandate }) {
+export async function join(relay, { cwd, collabId, me, mandate, sessionId }) {
   const ctx = await localContext(cwd, collabId);
-  const cur = await codeState(relay, collabId);
-  if (!cur.code) throw new Error("Der Code-Modus ist in diesem Collab noch nicht eingeschaltet.");
-  if (cur.code.repo !== ctx.repo) throw new Error(`Dieser Collab arbeitet in ${cur.code.repo}, dieser Worktree in ${ctx.repo}.`);
-  const res = await relay.put(`/v1/collabs/${enc(collabId)}/code/mandate`, { repo: ctx.repo, mandate });
+  const cur = await codeState(relay, collabId, sessionId);
+  // The plane of THIS repository -- a channel may carry several projects, one per plane.
+  const plane = planeForWorktree(cur, ctx.repo, ctx.branch);
+  if (!plane) {
+    const known = (Array.isArray(cur?.planes) ? cur.planes : []).map((p) => `${p.repo} ${p.branch}`).join(", ");
+    throw new Error(known
+      ? `Fuer ${ctx.repo} laeuft in diesem Collab noch kein Code-Austausch (laufend: ${known}). collab_code_start oeffnet ihn fuer dieses Projekt.`
+      : "Der Code-Modus ist in diesem Collab noch nicht eingeschaltet.");
+  }
+  // The branch goes along: two planes on one repository (two branches) are ambiguous without it.
+  const res = await relay.put(`/v1/collabs/${enc(collabId)}/code/mandate`, {
+    repo: ctx.repo, branch: plane.branch, mandate, ...(sessionId ? { session_id: sessionId } : {}),
+  });
+  cur.code = { repo: plane.repo, branch: plane.branch, base: plane.base };
   await ensureBase(ctx.top, cur.code.branch, cur.code.base);
   if (!(await isAncestor(ctx.top, cur.code.base, ctx.head)) && !(await isAncestor(ctx.top, ctx.head, cur.code.base))) {
     throw new Error(`Dieser Worktree steht nicht auf der Basis ${cur.code.base.slice(0, 7)} (${cur.code.branch}). Erst \`git checkout ${cur.code.branch}\` bzw. auf die Basis wechseln.`);
@@ -114,11 +183,18 @@ export async function publish(relay, { cwd, collabId, identity, sessionId, servi
   const prevOut = await git(ctx.top, ["rev-parse", "--verify", "-q", outRef(collabId)]);
   await gitText(ctx.top, ["update-ref", outRef(collabId), snap.head, ...(prevOut.code === 0 ? [prevOut.stdout.toString().trim()] : [])]);
   const bytes = await createBundle(ctx.top, collabId, st.base);
-  const up = await relay.postRaw(`/v1/collabs/${enc(collabId)}/code/bundles`, bytes, {
-    "Content-Type": "application/x-git-bundle",
-    "X-Kwcollab-Head": snap.head,
-    "X-Kwcollab-Prereqs": st.base,
-  });
+  // The bundle belongs to THIS address: two sessions of one person publish their own snapshots,
+  // and without the session the relay would file one on top of the other.
+  const up = await relay.postRaw(
+    `/v1/collabs/${enc(collabId)}/code/bundles${sessionId ? `?session=${enc(sessionId)}` : ""}`,
+    bytes,
+    {
+      "Content-Type": "application/x-git-bundle",
+      "X-Kwcollab-Head": snap.head,
+      "X-Kwcollab-Prereqs": st.base,
+      ...(sessionId ? { "X-Kwcollab-Session": sessionId } : {}),
+    }
+  );
   const all = await changedFiles(ctx.top, st.base, snap.head);
   const files = all.slice(0, 500);
   await relay.post(`/v1/collabs/${enc(collabId)}/code/events`, {
@@ -137,7 +213,9 @@ export async function publish(relay, { cwd, collabId, identity, sessionId, servi
 async function fetchMember(relay, ctx, collabId, member, fetchLive) {
   if (member.online && fetchLive) {
     try {
-      const head = await fetchLive(ctx, collabId, member.subject);
+      // The live fetch names the TARGET address (`?session=`) so the serving stream of the right
+      // session answers; the caller's own address travels as a header.
+      const head = await fetchLive(ctx, collabId, { subject: member.subject, sessionId: member.session_id });
       if (head === member.head) return { head, via: "live" };
     } catch { /* fall through to the bundle */ }
   }
@@ -164,17 +242,21 @@ export async function sync(relay, { cwd, collabId, me, mandate, sessionId, fetch
   const ctx = await localContext(cwd, collabId);
   let st = ctx.state;
   if (!st) throw new Error("Dieser Worktree ist nicht im Code-Modus (erst start/join).");
-  const cur = await codeState(relay, collabId);
+  const cur = await codeState(relay, collabId, sessionId);
   if (!cur.code) throw new Error("Der Code-Modus ist in diesem Collab aus.");
   if (cur.code.base !== st.base) {
     return { rebase: true, base: cur.code.base, report: [{ kind: "rebase", base: cur.code.base }] };
   }
-  const bundlesByMember = new Map((cur.bundles || []).map((b) => [b.member, b]));
+  const bundlesByAddr = bundlesByAddress(cur.bundles);
   const report = [];
-  const others = (cur.members || []).filter((m) => m.subject !== me && m.head && (!only || m.subject === only));
+  // ADDRESSES, not people: the sibling session of this person is another member of the exchange
+  // and integrates like anybody else. Only this very session is skipped.
+  const others = (cur.members || [])
+    .filter((m) => !isOwnAddress(m, me, sessionId) && m.head && (!only || m.subject === only));
   for (const m of others) {
-    if (st.integrated[m.subject] === m.head) continue;
-    const bundle = bundlesByMember.get(m.subject);
+    const ref = memberAddr(m);
+    if (st.integrated[ref] === m.head) continue;
+    const bundle = bundleFor(bundlesByAddr, m);
     // Only a bundle that carries exactly the announced head; an older one would integrate a state
     // the member has already moved on from.
     const usable = bundle && bundle.head === m.head ? bundle : null;
@@ -194,7 +276,7 @@ export async function sync(relay, { cwd, collabId, me, mandate, sessionId, fetch
       identity: { name: me },
     });
     if (await isAncestor(ctx.top, theirs, ours.head)) {
-      st = { ...st, integrated: { ...st.integrated, [m.subject]: theirs } };
+      st = { ...st, integrated: { ...st.integrated, [ref]: theirs } };
       writeState(ctx.gitDir, st);
       report.push({ kind: "contained", member: m.subject, head: theirs });
       continue;
@@ -205,29 +287,47 @@ export async function sync(relay, { cwd, collabId, me, mandate, sessionId, fetch
       if (mandate.apply === "never") { report.push({ kind: "waiting", member: m.subject, head: theirs, files }); continue; }
       const applied = await applyTree(ctx.top, ctx.gitDir, ours.tree, merged.tree);
       if (!applied.applied) { report.push({ kind: "retry", member: m.subject, reason: applied.reason }); continue; }
-      st = { ...st, integrated: { ...st.integrated, [m.subject]: theirs }, pending: [...new Set([...st.pending, theirs])] };
+      st = { ...st, integrated: { ...st.integrated, [ref]: theirs }, pending: [...new Set([...st.pending, theirs])] };
       writeState(ctx.gitDir, st);
       await relay.post(`/v1/collabs/${enc(collabId)}/code/events`, {
-        session_id: sessionId, payload: { type: "integrated", from_member: m.subject, head: theirs, result: "clean", paths: files.slice(0, 500) },
+        session_id: sessionId,
+        payload: { type: "integrated", from_member: m.subject, from_session: m.session_id ?? null, head: theirs, result: "clean", paths: files.slice(0, 500) },
       });
       report.push({ kind: "integrated", member: m.subject, head: theirs, files, via: fetched.via });
       continue;
     }
     // Conflict. Who resolves is the relay's standing decision for this pair, or ours to propose.
-    const standing = (cur.conflicts || []).find((c) => c.members.includes(me) && c.members.includes(m.subject));
+    // The pair is two ADDRESSES: two sessions of one person conflict as separately as two people.
+    const ownRef = memberAddr({ subject: me, session_id: sessionId });
+    const standing = (cur.conflicts || []).find((c) => (Array.isArray(c.refs)
+      ? c.refs.includes(ownRef) && c.refs.includes(ref)
+      : (c.members || []).includes(me) && (c.members || []).includes(m.subject)));
     let decision = standing;
     if (!decision) {
-      const mineSeq = (cur.members.find((x) => x.subject === me) || {}).head_seq ?? 0;
-      const proposal = mineSeq > (m.head_seq ?? 0) ? me : m.subject;   // later publisher resolves
+      const mineSeq = (cur.members.find((x) => memberAddr(x) === ownRef) || {}).head_seq ?? 0;
+      const laterIsMe = mineSeq > (m.head_seq ?? 0);
       const myArea = merged.conflicts.every((p) => inArea(mandate.area, p));
-      const resolver = myArea && proposal === me ? m.subject : proposal;
+      // The later publisher resolves, unless the conflict lies in this session's own area -- then
+      // the other address does. Tracked per ADDRESS: with two sessions of one person the subject
+      // alone cannot say which one is meant.
+      const resolverIsMe = laterIsMe && !myArea;
+      const resolver = resolverIsMe ? me : m.subject;
+      const resolverSession = resolverIsMe ? (sessionId ?? null) : (m.session_id ?? null);
       const res = await relay.post(`/v1/collabs/${enc(collabId)}/code/events`, {
         session_id: sessionId,
-        payload: { type: "conflict", with_member: m.subject, with_head: theirs, own_head: ours.head, resolver, paths: merged.conflicts.slice(0, 500) },
+        payload: {
+          type: "conflict", with_member: m.subject, with_session: m.session_id ?? null,
+          with_head: theirs, own_head: ours.head, resolver, resolver_session: resolverSession,
+          paths: merged.conflicts.slice(0, 500),
+        },
       });
       decision = res.conflict;
     }
-    if (decision?.resolver !== me) {
+    // Same person, other address is NOT the same resolver: the relay names the address, and only
+    // that one resolves.
+    const iResolve = decision?.resolver === me
+      && (!decision?.resolver_session || decision.resolver_session === sessionId);
+    if (!iResolve) {
       report.push({ kind: "waiting_for_resolver", member: m.subject, resolver: decision?.resolver, paths: merged.conflicts });
       continue;
     }
@@ -242,11 +342,15 @@ export async function sync(relay, { cwd, collabId, me, mandate, sessionId, fetch
     st = {
       ...st,
       pending: [...new Set([...st.pending, theirs])],
-      conflicts: [...st.conflicts.filter((c) => c.member !== m.subject), { member: m.subject, head: theirs, paths: merged.conflicts }],
+      conflicts: [
+        ...st.conflicts.filter((c) => (c.ref ?? memberAddr({ subject: c.member, session_id: c.session })) !== ref),
+        { member: m.subject, session: m.session_id ?? null, ref, head: theirs, paths: merged.conflicts },
+      ],
     };
     writeState(ctx.gitDir, st);
     await relay.post(`/v1/collabs/${enc(collabId)}/code/events`, {
-      session_id: sessionId, payload: { type: "adapt", to_head: theirs, with_member: m.subject },
+      session_id: sessionId,
+      payload: { type: "adapt", to_head: theirs, with_member: m.subject, with_session: m.session_id ?? null },
     });
     report.push({ kind: "resolve", member: m.subject, head: theirs, paths: merged.conflicts });
   }
@@ -265,13 +369,22 @@ export async function resolved(relay, { cwd, collabId, identity, sessionId }) {
   // A conflict from a rebase onto a checkpoint is this worktree's own business -- no member to tell.
   for (const c of st.conflicts.filter((x) => x.member !== "checkpoint")) {
     await relay.post(`/v1/collabs/${enc(collabId)}/code/events`, {
-      session_id: sessionId, payload: { type: "integrated", from_member: c.member, head: c.head, result: "resolved", paths: c.paths.slice(0, 500) },
+      session_id: sessionId,
+      payload: {
+        type: "integrated", from_member: c.member, from_session: c.session ?? null,
+        head: c.head, result: "resolved", paths: c.paths.slice(0, 500),
+      },
     });
   }
   const after = readState(ctx.gitDir);
   writeState(ctx.gitDir, {
     ...after,
-    integrated: { ...after.integrated, ...Object.fromEntries(st.conflicts.filter((c) => c.member !== "checkpoint").map((c) => [c.member, c.head])) },
+    integrated: {
+      ...after.integrated,
+      ...Object.fromEntries(st.conflicts
+        .filter((c) => c.member !== "checkpoint")
+        .map((c) => [c.ref ?? memberAddr({ subject: c.member, session_id: c.session }), c.head])),
+    },
     conflicts: [],
   });
   return { resolved: st.conflicts.map((c) => c.member), published: pub.published, head: pub.head };
@@ -321,10 +434,10 @@ export async function checkpoint(relay, { cwd, collabId, me, mandate, message, c
  * Safe only when everything this worktree had published is contained in the checkpoint (the
  * checkpoint was made after integrating it). Unpublished edits stay as a diff on top.
  */
-export async function rebase(relay, { cwd, collabId, me }) {
+export async function rebase(relay, { cwd, collabId, me, sessionId = null }) {
   const ctx = await localContext(cwd, collabId);
   const st = ctx.state;
-  const cur = await codeState(relay, collabId);
+  const cur = await codeState(relay, collabId, sessionId);
   if (!cur.code || !st) throw new Error("Nicht im Code-Modus.");
   if (cur.code.base === st.base) return { moved: false, base: st.base };
   const f = await git(ctx.top, ["fetch", "-q", "--no-tags", "origin", cur.code.branch]);
@@ -352,8 +465,8 @@ export async function rebase(relay, { cwd, collabId, me }) {
 }
 
 /** Where everybody stands, for the status tool and the surfaces. */
-export async function status(relay, { cwd, collabId, me }) {
-  const cur = await codeState(relay, collabId);
+export async function status(relay, { cwd, collabId, me, sessionId }) {
+  const cur = await codeState(relay, collabId, sessionId);
   let local = null;
   try {
     const ctx = await localContext(cwd, collabId);
@@ -365,7 +478,7 @@ export async function status(relay, { cwd, collabId, me }) {
     local,
     members: (cur.members || []).map((m) => ({
       ...m,
-      integrated: m.subject === me ? null : local?.integrated?.[m.subject] === m.head,
+      integrated: isOwnAddress(m, me, sessionId) ? null : local?.integrated?.[memberAddr(m)] === m.head,
     })),
     conflicts: cur.conflicts || [],
   };

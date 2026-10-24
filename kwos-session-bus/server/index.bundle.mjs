@@ -15941,114 +15941,6 @@ function rememberOwnHumanLine(seq) {
   while (sent.size > LIMIT) sent.delete(sent.values().next().value);
 }
 
-// server/collab.js
-async function listCollabs() {
-  const { data } = await call("/v1/collabs");
-  return Array.isArray(data?.collabs) ? data.collabs : [];
-}
-async function acceptCollab(collabId, { mode } = {}) {
-  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/accept`, {
-    method: "POST",
-    body: { session_id: config2.sessionId, ...mode ? { mode } : {} }
-  });
-  return data ?? {};
-}
-async function myJoinedCollabs() {
-  const all = await listCollabs();
-  return all.filter((c) => c.my_status === "joined" && Array.isArray(c.members) && c.members.some((m) => m.session_id === config2.sessionId && m.status === "joined"));
-}
-async function myInvitations() {
-  const all = await listCollabs();
-  return all.filter((c) => c.my_status === "invited");
-}
-async function resolveCollab(collabId) {
-  const joined = await myJoinedCollabs();
-  if (collabId) {
-    const hit = joined.find((c) => c.collab_id === collabId);
-    if (!hit) throw new Error(`Diese Session ist nicht (mehr) im Collab ${collabId}.`);
-    return hit;
-  }
-  if (joined.length === 1) return joined[0];
-  if (joined.length === 0) {
-    throw new Error(
-      "Diese Session ist in keinem Collab. Ein Collab wird im kwclaude-Fenster angenommen (Einladung links in der Sitzungsliste) -- nicht von hier aus."
-    );
-  }
-  const list = joined.map((c) => `${c.collab_id} (Workitem ${c.workitem}${c.title ? `: ${c.title}` : ""})`).join(", ");
-  throw new Error(`Diese Session ist in mehreren Collabs -- bitte collab_id angeben: ${list}`);
-}
-async function collabDetail(collabId) {
-  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}`);
-  return data;
-}
-var SUMMARY_MAX = 280;
-function clampSummary(value, max = SUMMARY_MAX) {
-  if (typeof value !== "string") return null;
-  const line = value.replace(/\s+/g, " ").trim();
-  if (line === "") return null;
-  if (line.length <= max) return line;
-  const cut = line.slice(0, max - 1);
-  const space = cut.lastIndexOf(" ");
-  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}\u2026`;
-}
-async function sendCollabMessage(collabId, text2, attachmentId = null, fromHuman = false, summary = null) {
-  const brief = clampSummary(summary);
-  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages`, {
-    method: "POST",
-    body: {
-      text: text2 ?? "",
-      author_kind: fromHuman ? "human" : "claude",
-      session_id: config2.sessionId,
-      ...attachmentId ? { attachment_id: attachmentId } : {},
-      ...brief !== null ? { summary: brief } : {}
-    }
-  });
-  if (fromHuman) rememberOwnHumanLine(data?.message?.seq);
-  return data ?? {};
-}
-async function getCollabAttachment(collabId, attachmentId, { fetchImpl = fetch } = {}) {
-  const bearer = await getAccessToken();
-  const res = await fetchImpl(
-    `${config2.relayUrl}/v1/collabs/${encodeURIComponent(collabId)}/attachments/${encodeURIComponent(attachmentId)}`,
-    { headers: { Authorization: `Bearer ${bearer}` } }
-  );
-  if (!res.ok) {
-    const text2 = await res.text().catch(() => "");
-    throw new Error(`Relay GET /v1/collabs/${collabId}/attachments/${attachmentId} -> ${res.status}: ${text2}`);
-  }
-  const mimeType = res.headers.get("content-type") || "application/octet-stream";
-  const buf = Buffer.from(await res.arrayBuffer());
-  return { mimeType, data: buf.toString("base64") };
-}
-async function getCollabMessage(collabId, seq) {
-  if (!Number.isInteger(seq) || seq < 1) {
-    throw new Error(`collab_get_message: seq muss eine positive Ganzzahl sein (erhalten: ${JSON.stringify(seq)}).`);
-  }
-  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages/${encodeURIComponent(seq)}`);
-  return data?.message ?? data ?? {};
-}
-async function listLeases(collabId) {
-  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/leases`);
-  return Array.isArray(data?.leases) ? data.leases : [];
-}
-async function acquireLease(collabId, { subjectId, subject, section, ttlSec, exclusive, reason }) {
-  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/leases`, {
-    method: "POST",
-    body: {
-      ...subjectId ? { subject_id: subjectId } : {},
-      ...subject ? { subject } : {},
-      section,
-      ...ttlSec ? { ttl_sec: ttlSec } : {},
-      ...exclusive === false ? { exclusive: false } : {},
-      ...reason ? { reason } : {}
-    }
-  });
-  return data ?? {};
-}
-async function releaseLease(collabId, leaseId) {
-  await call(`/v1/collabs/${encodeURIComponent(collabId)}/leases/${encodeURIComponent(leaseId)}`, { method: "DELETE" });
-}
-
 // server/codeGit.js
 import { spawn as spawn2 } from "node:child_process";
 import { mkdirSync, existsSync as existsSync3, readFileSync as readFileSync2, writeFileSync, renameSync, statSync } from "node:fs";
@@ -16361,8 +16253,165 @@ function globMatch(glob, path) {
 }
 var inArea = (area, path) => (area || []).some((g) => globMatch(g, path));
 
+// server/collab.js
+async function listCollabs() {
+  const { data } = await call("/v1/collabs");
+  return Array.isArray(data?.collabs) ? data.collabs : [];
+}
+async function sessionRepo(cwd2) {
+  if (!cwd2) return null;
+  try {
+    const info = await repoInfo(cwd2);
+    return info.repo ? { repo: info.repo, branch: info.branch } : null;
+  } catch {
+    return null;
+  }
+}
+async function acceptCollab(collabId, { mode, cwd: cwd2 = sessionCwd, replaces = null } = {}) {
+  const where = await sessionRepo(cwd2);
+  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/accept`, {
+    method: "POST",
+    body: {
+      session_id: config2.sessionId,
+      ...where?.repo ? { repo: where.repo } : {},
+      ...where?.branch ? { branch: where.branch } : {},
+      ...mode ? { mode } : {},
+      // The agent this one REPLACES after /clear or --resume: the relay hands its code state over
+      // and removes it, so the person does not read as two agents.
+      ...replaces && replaces !== config2.sessionId ? { replaces } : {}
+    }
+  });
+  return data ?? {};
+}
+async function myJoinedCollabs() {
+  const all = await listCollabs();
+  return all.filter((c) => c.my_status === "joined" && Array.isArray(c.members) && c.members.some((m) => m.status === "joined" && memberHasSession(m, config2.sessionId)));
+}
+function memberHasSession(member, sessionId) {
+  if (!member || !sessionId) return false;
+  if (Array.isArray(member.agents)) return member.agents.some((a) => a?.session_id === sessionId);
+  if (Array.isArray(member.sessions)) return member.sessions.some((s) => s?.session_id === sessionId);
+  return member.session_id === sessionId;
+}
+function codeEntryFor(entries, subject, sessionId) {
+  if (!subject || !sessionId) return null;
+  return (entries || []).find((m) => m?.subject === subject && m?.session_id === sessionId) ?? null;
+}
+async function myInvitations() {
+  const all = await listCollabs();
+  return all.filter((c) => c.my_status === "invited");
+}
+async function resolveCollab(collabId) {
+  const joined = await myJoinedCollabs();
+  if (collabId) {
+    const hit = joined.find((c) => c.collab_id === collabId);
+    if (!hit) throw new Error(`Diese Session ist nicht (mehr) im Collab ${collabId}.`);
+    return hit;
+  }
+  if (joined.length === 1) return joined[0];
+  if (joined.length === 0) {
+    throw new Error(
+      "Diese Session ist in keinem Collab. Ein Collab wird im kwclaude-Fenster angenommen (Einladung links in der Sitzungsliste) -- nicht von hier aus."
+    );
+  }
+  const list = joined.map((c) => `${c.collab_id} (Workitem ${c.workitem}${c.title ? `: ${c.title}` : ""})`).join(", ");
+  throw new Error(`Diese Session ist in mehreren Collabs -- bitte collab_id angeben: ${list}`);
+}
+async function collabDetail(collabId) {
+  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}`);
+  return data;
+}
+var SUMMARY_MAX = 280;
+function clampSummary(value, max = SUMMARY_MAX) {
+  if (typeof value !== "string") return null;
+  const line = value.replace(/\s+/g, " ").trim();
+  if (line === "") return null;
+  if (line.length <= max) return line;
+  const cut = line.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}\u2026`;
+}
+async function sendCollabMessage(collabId, text2, attachmentId = null, fromHuman = false, summary = null) {
+  const brief = clampSummary(summary);
+  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages`, {
+    method: "POST",
+    body: {
+      text: text2 ?? "",
+      author_kind: fromHuman ? "human" : "claude",
+      session_id: config2.sessionId,
+      ...attachmentId ? { attachment_id: attachmentId } : {},
+      ...brief !== null ? { summary: brief } : {}
+    }
+  });
+  if (fromHuman) rememberOwnHumanLine(data?.message?.seq);
+  return data ?? {};
+}
+async function getCollabAttachment(collabId, attachmentId, { fetchImpl = fetch } = {}) {
+  const bearer = await getAccessToken();
+  const res = await fetchImpl(
+    `${config2.relayUrl}/v1/collabs/${encodeURIComponent(collabId)}/attachments/${encodeURIComponent(attachmentId)}`,
+    { headers: { Authorization: `Bearer ${bearer}` } }
+  );
+  if (!res.ok) {
+    const text2 = await res.text().catch(() => "");
+    throw new Error(`Relay GET /v1/collabs/${collabId}/attachments/${attachmentId} -> ${res.status}: ${text2}`);
+  }
+  const mimeType = res.headers.get("content-type") || "application/octet-stream";
+  const buf = Buffer.from(await res.arrayBuffer());
+  return { mimeType, data: buf.toString("base64") };
+}
+async function getCollabMessage(collabId, seq) {
+  if (!Number.isInteger(seq) || seq < 1) {
+    throw new Error(`collab_get_message: seq muss eine positive Ganzzahl sein (erhalten: ${JSON.stringify(seq)}).`);
+  }
+  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages/${encodeURIComponent(seq)}`);
+  return data?.message ?? data ?? {};
+}
+async function listLeases(collabId) {
+  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/leases`);
+  return Array.isArray(data?.leases) ? data.leases : [];
+}
+async function acquireLease(collabId, { subjectId, subject, section, ttlSec, exclusive, reason }) {
+  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/leases`, {
+    method: "POST",
+    body: {
+      ...subjectId ? { subject_id: subjectId } : {},
+      ...subject ? { subject } : {},
+      section,
+      ...ttlSec ? { ttl_sec: ttlSec } : {},
+      ...exclusive === false ? { exclusive: false } : {},
+      ...reason ? { reason } : {}
+    }
+  });
+  return data ?? {};
+}
+async function releaseLease(collabId, leaseId) {
+  await call(`/v1/collabs/${encodeURIComponent(collabId)}/leases/${encodeURIComponent(leaseId)}`, { method: "DELETE" });
+}
+
 // server/codeExchange.js
 var enc = encodeURIComponent;
+var memberAddr = (m) => m?.session_id ? `${m.subject}#${m.session_id}` : m?.subject;
+function isOwnAddress(m, me, sessionId) {
+  if (!m || m.subject !== me) return false;
+  if (m.session_id == null) return true;
+  return m.session_id === sessionId;
+}
+var bundleAddr = (b) => {
+  const subject = b?.member_subject ?? b?.member;
+  return b?.member_session ? `${subject}#${b.member_session}` : subject;
+};
+function bundlesByAddress(bundles) {
+  const map = /* @__PURE__ */ new Map();
+  for (const b of bundles || []) {
+    const key = bundleAddr(b);
+    if (key) map.set(key, b);
+  }
+  return map;
+}
+function bundleFor(map, m) {
+  return map.get(memberAddr(m)) ?? map.get(m?.subject) ?? null;
+}
 async function localContext(cwd2, collabId) {
   await checkGitVersion(cwd2);
   const info = await repoInfo(cwd2);
@@ -16373,8 +16422,17 @@ async function localContext(cwd2, collabId) {
   }
   return { ...info, state };
 }
-async function codeState(relay2, collabId) {
-  return relay2.get(`/v1/collabs/${enc(collabId)}/code`);
+async function codeState(relay2, collabId, sessionId = null) {
+  const q = sessionId ? `?session=${enc(sessionId)}` : "";
+  return relay2.get(`/v1/collabs/${enc(collabId)}/code${q}`);
+}
+function planeForWorktree(cur, repo, branch) {
+  const planes = Array.isArray(cur?.planes) ? cur.planes : [];
+  const forRepo = planes.filter((p) => p.repo === repo);
+  if (forRepo.length === 0) {
+    return cur?.code && cur.code.repo === repo ? { ...cur.code, id: null } : null;
+  }
+  return forRepo.find((p) => p.branch === branch) || (forRepo.length === 1 ? forRepo[0] : null);
 }
 async function ensureBase(top, branch, base) {
   const have = await git(top, ["cat-file", "-e", `${base}^{commit}`]);
@@ -16387,7 +16445,7 @@ async function ensureBase(top, branch, base) {
 function freshState(collab, me, base, branch) {
   return { collab, me, base, branch, last: null, integrated: {}, pending: [], conflicts: [] };
 }
-async function start(relay2, { cwd: cwd2, collabId, me, mandate }) {
+async function start(relay2, { cwd: cwd2, collabId, me, mandate, sessionId }) {
   const ctx = await localContext(cwd2, collabId);
   if (!ctx.branch) throw new Error("HEAD ist kein Branch -- der Code-Modus arbeitet auf einem Branch.");
   const r = await git(ctx.top, ["fetch", "-q", "--no-tags", "origin", ctx.branch]);
@@ -16396,18 +16454,33 @@ async function start(relay2, { cwd: cwd2, collabId, me, mandate }) {
   if (!await isAncestor(ctx.top, ctx.head, remoteHead)) {
     throw new Error(`HEAD ${ctx.head.slice(0, 7)} liegt nicht auf origin/${ctx.branch}. Erst pushen, dann den Code-Modus starten.`);
   }
-  const res = await relay2.post(`/v1/collabs/${enc(collabId)}/code`, { repo: ctx.repo, branch: ctx.branch, base: ctx.head, mandate });
+  const res = await relay2.post(`/v1/collabs/${enc(collabId)}/code`, {
+    repo: ctx.repo,
+    branch: ctx.branch,
+    base: ctx.head,
+    mandate,
+    ...sessionId ? { session_id: sessionId } : {}
+  });
   const base = res.code.base;
   await ensureBase(ctx.top, ctx.branch, base);
   writeState(ctx.gitDir, ctx.state?.base === base ? ctx.state : freshState(collabId, me, base, ctx.branch));
   return { repo: ctx.repo, branch: ctx.branch, base, mandate: res.mandate };
 }
-async function join3(relay2, { cwd: cwd2, collabId, me, mandate }) {
+async function join3(relay2, { cwd: cwd2, collabId, me, mandate, sessionId }) {
   const ctx = await localContext(cwd2, collabId);
-  const cur = await codeState(relay2, collabId);
-  if (!cur.code) throw new Error("Der Code-Modus ist in diesem Collab noch nicht eingeschaltet.");
-  if (cur.code.repo !== ctx.repo) throw new Error(`Dieser Collab arbeitet in ${cur.code.repo}, dieser Worktree in ${ctx.repo}.`);
-  const res = await relay2.put(`/v1/collabs/${enc(collabId)}/code/mandate`, { repo: ctx.repo, mandate });
+  const cur = await codeState(relay2, collabId, sessionId);
+  const plane = planeForWorktree(cur, ctx.repo, ctx.branch);
+  if (!plane) {
+    const known = (Array.isArray(cur?.planes) ? cur.planes : []).map((p) => `${p.repo} ${p.branch}`).join(", ");
+    throw new Error(known ? `Fuer ${ctx.repo} laeuft in diesem Collab noch kein Code-Austausch (laufend: ${known}). collab_code_start oeffnet ihn fuer dieses Projekt.` : "Der Code-Modus ist in diesem Collab noch nicht eingeschaltet.");
+  }
+  const res = await relay2.put(`/v1/collabs/${enc(collabId)}/code/mandate`, {
+    repo: ctx.repo,
+    branch: plane.branch,
+    mandate,
+    ...sessionId ? { session_id: sessionId } : {}
+  });
+  cur.code = { repo: plane.repo, branch: plane.branch, base: plane.base };
   await ensureBase(ctx.top, cur.code.branch, cur.code.base);
   if (!await isAncestor(ctx.top, cur.code.base, ctx.head) && !await isAncestor(ctx.top, ctx.head, cur.code.base)) {
     throw new Error(`Dieser Worktree steht nicht auf der Basis ${cur.code.base.slice(0, 7)} (${cur.code.branch}). Erst \`git checkout ${cur.code.branch}\` bzw. auf die Basis wechseln.`);
@@ -16435,11 +16508,16 @@ async function publish(relay2, { cwd: cwd2, collabId, identity, sessionId, servi
   const prevOut = await git(ctx.top, ["rev-parse", "--verify", "-q", outRef(collabId)]);
   await gitText(ctx.top, ["update-ref", outRef(collabId), snap.head, ...prevOut.code === 0 ? [prevOut.stdout.toString().trim()] : []]);
   const bytes = await createBundle(ctx.top, collabId, st.base);
-  const up = await relay2.postRaw(`/v1/collabs/${enc(collabId)}/code/bundles`, bytes, {
-    "Content-Type": "application/x-git-bundle",
-    "X-Kwcollab-Head": snap.head,
-    "X-Kwcollab-Prereqs": st.base
-  });
+  const up = await relay2.postRaw(
+    `/v1/collabs/${enc(collabId)}/code/bundles${sessionId ? `?session=${enc(sessionId)}` : ""}`,
+    bytes,
+    {
+      "Content-Type": "application/x-git-bundle",
+      "X-Kwcollab-Head": snap.head,
+      "X-Kwcollab-Prereqs": st.base,
+      ...sessionId ? { "X-Kwcollab-Session": sessionId } : {}
+    }
+  );
   const all = await changedFiles(ctx.top, st.base, snap.head);
   const files = all.slice(0, 500);
   await relay2.post(`/v1/collabs/${enc(collabId)}/code/events`, {
@@ -16461,7 +16539,7 @@ async function publish(relay2, { cwd: cwd2, collabId, identity, sessionId, servi
 async function fetchMember(relay2, ctx, collabId, member, fetchLive2) {
   if (member.online && fetchLive2) {
     try {
-      const head2 = await fetchLive2(ctx, collabId, member.subject);
+      const head2 = await fetchLive2(ctx, collabId, { subject: member.subject, sessionId: member.session_id });
       if (head2 === member.head) return { head: head2, via: "live" };
     } catch {
     }
@@ -16475,17 +16553,18 @@ async function sync(relay2, { cwd: cwd2, collabId, me, mandate, sessionId, fetch
   const ctx = await localContext(cwd2, collabId);
   let st = ctx.state;
   if (!st) throw new Error("Dieser Worktree ist nicht im Code-Modus (erst start/join).");
-  const cur = await codeState(relay2, collabId);
+  const cur = await codeState(relay2, collabId, sessionId);
   if (!cur.code) throw new Error("Der Code-Modus ist in diesem Collab aus.");
   if (cur.code.base !== st.base) {
     return { rebase: true, base: cur.code.base, report: [{ kind: "rebase", base: cur.code.base }] };
   }
-  const bundlesByMember = new Map((cur.bundles || []).map((b) => [b.member, b]));
+  const bundlesByAddr = bundlesByAddress(cur.bundles);
   const report = [];
-  const others = (cur.members || []).filter((m) => m.subject !== me && m.head && (!only || m.subject === only));
+  const others = (cur.members || []).filter((m) => !isOwnAddress(m, me, sessionId) && m.head && (!only || m.subject === only));
   for (const m of others) {
-    if (st.integrated[m.subject] === m.head) continue;
-    const bundle = bundlesByMember.get(m.subject);
+    const ref = memberAddr(m);
+    if (st.integrated[ref] === m.head) continue;
+    const bundle = bundleFor(bundlesByAddr, m);
     const usable = bundle && bundle.head === m.head ? bundle : null;
     if (!usable && !m.online) {
       report.push({ kind: "unavailable", member: m.subject });
@@ -16506,7 +16585,7 @@ async function sync(relay2, { cwd: cwd2, collabId, me, mandate, sessionId, fetch
       identity: { name: me }
     });
     if (await isAncestor(ctx.top, theirs, ours.head)) {
-      st = { ...st, integrated: { ...st.integrated, [m.subject]: theirs } };
+      st = { ...st, integrated: { ...st.integrated, [ref]: theirs } };
       writeState(ctx.gitDir, st);
       report.push({ kind: "contained", member: m.subject, head: theirs });
       continue;
@@ -16523,29 +16602,42 @@ async function sync(relay2, { cwd: cwd2, collabId, me, mandate, sessionId, fetch
         report.push({ kind: "retry", member: m.subject, reason: applied2.reason });
         continue;
       }
-      st = { ...st, integrated: { ...st.integrated, [m.subject]: theirs }, pending: [.../* @__PURE__ */ new Set([...st.pending, theirs])] };
+      st = { ...st, integrated: { ...st.integrated, [ref]: theirs }, pending: [.../* @__PURE__ */ new Set([...st.pending, theirs])] };
       writeState(ctx.gitDir, st);
       await relay2.post(`/v1/collabs/${enc(collabId)}/code/events`, {
         session_id: sessionId,
-        payload: { type: "integrated", from_member: m.subject, head: theirs, result: "clean", paths: files.slice(0, 500) }
+        payload: { type: "integrated", from_member: m.subject, from_session: m.session_id ?? null, head: theirs, result: "clean", paths: files.slice(0, 500) }
       });
       report.push({ kind: "integrated", member: m.subject, head: theirs, files, via: fetched.via });
       continue;
     }
-    const standing = (cur.conflicts || []).find((c) => c.members.includes(me) && c.members.includes(m.subject));
+    const ownRef = memberAddr({ subject: me, session_id: sessionId });
+    const standing = (cur.conflicts || []).find((c) => Array.isArray(c.refs) ? c.refs.includes(ownRef) && c.refs.includes(ref) : (c.members || []).includes(me) && (c.members || []).includes(m.subject));
     let decision = standing;
     if (!decision) {
-      const mineSeq = (cur.members.find((x) => x.subject === me) || {}).head_seq ?? 0;
-      const proposal = mineSeq > (m.head_seq ?? 0) ? me : m.subject;
+      const mineSeq = (cur.members.find((x) => memberAddr(x) === ownRef) || {}).head_seq ?? 0;
+      const laterIsMe = mineSeq > (m.head_seq ?? 0);
       const myArea = merged.conflicts.every((p) => inArea(mandate.area, p));
-      const resolver = myArea && proposal === me ? m.subject : proposal;
+      const resolverIsMe = laterIsMe && !myArea;
+      const resolver = resolverIsMe ? me : m.subject;
+      const resolverSession = resolverIsMe ? sessionId ?? null : m.session_id ?? null;
       const res = await relay2.post(`/v1/collabs/${enc(collabId)}/code/events`, {
         session_id: sessionId,
-        payload: { type: "conflict", with_member: m.subject, with_head: theirs, own_head: ours.head, resolver, paths: merged.conflicts.slice(0, 500) }
+        payload: {
+          type: "conflict",
+          with_member: m.subject,
+          with_session: m.session_id ?? null,
+          with_head: theirs,
+          own_head: ours.head,
+          resolver,
+          resolver_session: resolverSession,
+          paths: merged.conflicts.slice(0, 500)
+        }
       });
       decision = res.conflict;
     }
-    if (decision?.resolver !== me) {
+    const iResolve = decision?.resolver === me && (!decision?.resolver_session || decision.resolver_session === sessionId);
+    if (!iResolve) {
       report.push({ kind: "waiting_for_resolver", member: m.subject, resolver: decision?.resolver, paths: merged.conflicts });
       continue;
     }
@@ -16563,12 +16655,15 @@ async function sync(relay2, { cwd: cwd2, collabId, me, mandate, sessionId, fetch
     st = {
       ...st,
       pending: [.../* @__PURE__ */ new Set([...st.pending, theirs])],
-      conflicts: [...st.conflicts.filter((c) => c.member !== m.subject), { member: m.subject, head: theirs, paths: merged.conflicts }]
+      conflicts: [
+        ...st.conflicts.filter((c) => (c.ref ?? memberAddr({ subject: c.member, session_id: c.session })) !== ref),
+        { member: m.subject, session: m.session_id ?? null, ref, head: theirs, paths: merged.conflicts }
+      ]
     };
     writeState(ctx.gitDir, st);
     await relay2.post(`/v1/collabs/${enc(collabId)}/code/events`, {
       session_id: sessionId,
-      payload: { type: "adapt", to_head: theirs, with_member: m.subject }
+      payload: { type: "adapt", to_head: theirs, with_member: m.subject, with_session: m.session_id ?? null }
     });
     report.push({ kind: "resolve", member: m.subject, head: theirs, paths: merged.conflicts });
   }
@@ -16585,13 +16680,23 @@ async function resolved(relay2, { cwd: cwd2, collabId, identity, sessionId }) {
   for (const c of st.conflicts.filter((x) => x.member !== "checkpoint")) {
     await relay2.post(`/v1/collabs/${enc(collabId)}/code/events`, {
       session_id: sessionId,
-      payload: { type: "integrated", from_member: c.member, head: c.head, result: "resolved", paths: c.paths.slice(0, 500) }
+      payload: {
+        type: "integrated",
+        from_member: c.member,
+        from_session: c.session ?? null,
+        head: c.head,
+        result: "resolved",
+        paths: c.paths.slice(0, 500)
+      }
     });
   }
   const after = readState(ctx.gitDir);
   writeState(ctx.gitDir, {
     ...after,
-    integrated: { ...after.integrated, ...Object.fromEntries(st.conflicts.filter((c) => c.member !== "checkpoint").map((c) => [c.member, c.head])) },
+    integrated: {
+      ...after.integrated,
+      ...Object.fromEntries(st.conflicts.filter((c) => c.member !== "checkpoint").map((c) => [c.ref ?? memberAddr({ subject: c.member, session_id: c.session }), c.head]))
+    },
     conflicts: []
   });
   return { resolved: st.conflicts.map((c) => c.member), published: pub.published, head: pub.head };
@@ -16627,10 +16732,10 @@ ${trailers}` : message]);
   writeState(ctx.gitDir, freshState(collabId, me, sha, st.branch));
   return { sha, branch: st.branch };
 }
-async function rebase(relay2, { cwd: cwd2, collabId, me }) {
+async function rebase(relay2, { cwd: cwd2, collabId, me, sessionId = null }) {
   const ctx = await localContext(cwd2, collabId);
   const st = ctx.state;
-  const cur = await codeState(relay2, collabId);
+  const cur = await codeState(relay2, collabId, sessionId);
   if (!cur.code || !st) throw new Error("Nicht im Code-Modus.");
   if (cur.code.base === st.base) return { moved: false, base: st.base };
   const f = await git(ctx.top, ["fetch", "-q", "--no-tags", "origin", cur.code.branch]);
@@ -16648,8 +16753,8 @@ async function rebase(relay2, { cwd: cwd2, collabId, me }) {
   writeState(ctx.gitDir, fresh);
   return { moved: true, base: cur.code.base, carried: wip.tree !== await gitText(ctx.top, ["rev-parse", `${cur.code.base}^{tree}`]), clean: merged.clean, conflicts: merged.conflicts };
 }
-async function status(relay2, { cwd: cwd2, collabId, me }) {
-  const cur = await codeState(relay2, collabId);
+async function status(relay2, { cwd: cwd2, collabId, me, sessionId }) {
+  const cur = await codeState(relay2, collabId, sessionId);
   let local = null;
   try {
     const ctx = await localContext(cwd2, collabId);
@@ -16663,7 +16768,7 @@ async function status(relay2, { cwd: cwd2, collabId, me }) {
     local,
     members: (cur.members || []).map((m) => ({
       ...m,
-      integrated: m.subject === me ? null : local?.integrated?.[m.subject] === m.head
+      integrated: isOwnAddress(m, me, sessionId) ? null : local?.integrated?.[memberAddr(m)] === m.head
     })),
     conflicts: cur.conflicts || []
   };
@@ -16733,20 +16838,30 @@ function relayAdapter({ relayUrl, getToken, fetchImpl = fetch }) {
     getRaw: (path) => request("GET", path, { expect: "raw" })
   };
 }
-function makeFetchLive({ relayUrl, getToken }) {
+function gitFetchUrl(relayUrl, collabId, member, sessionId = null) {
+  const target = typeof member === "string" ? { subject: member } : member;
+  const session = sessionId ?? target?.sessionId ?? target?.session_id ?? null;
+  const path = `${relayUrl}/v1/collabs/${enc2(collabId)}/git/${enc2(target?.subject)}`;
+  return session ? `${path}?session=${enc2(session)}` : path;
+}
+function makeFetchLive({ relayUrl, getToken, sessionId = null }) {
   return async (ctx, collabId, member) => {
     const token = await getToken();
-    const url = `${relayUrl}/v1/collabs/${enc2(collabId)}/git/${enc2(member)}`;
-    const env = {
-      GIT_CONFIG_COUNT: "2",
-      GIT_CONFIG_KEY_0: "http.extraHeader",
-      GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
-      GIT_CONFIG_KEY_1: "credential.helper",
-      GIT_CONFIG_VALUE_1: ""
-    };
-    const r = await git(ctx.top, ["fetch", "-q", "--no-tags", "--no-write-fetch-head", url, `+${outRef(collabId)}:${inRef(collabId, member)}`], { env, timeoutMs: 6e4 });
+    const target = typeof member === "string" ? { subject: member } : member;
+    const url = gitFetchUrl(relayUrl, collabId, target);
+    const config3 = [
+      ["http.extraHeader", `Authorization: Bearer ${token}`],
+      ["credential.helper", ""],
+      ...sessionId ? [["http.extraHeader", `X-Kwcollab-Session: ${sessionId}`]] : []
+    ];
+    const env = { GIT_CONFIG_COUNT: String(config3.length) };
+    config3.forEach(([key, value], i) => {
+      env[`GIT_CONFIG_KEY_${i}`] = key;
+      env[`GIT_CONFIG_VALUE_${i}`] = value;
+    });
+    const r = await git(ctx.top, ["fetch", "-q", "--no-tags", "--no-write-fetch-head", url, `+${outRef(collabId)}:${inRef(collabId, target.subject)}`], { env, timeoutMs: 6e4 });
     if (r.code !== 0) throw new Error(`live fetch failed: ${r.stderr.trim().replace(token, "***")}`);
-    return gitText(ctx.top, ["rev-parse", inRef(collabId, member)]);
+    return gitText(ctx.top, ["rev-parse", inRef(collabId, target.subject)]);
   };
 }
 var SERVE_REQUEST_INFLATED_MAX = 8 * 1024 * 1024;
@@ -16756,7 +16871,7 @@ function relay() {
   return relayAdapter({ relayUrl: config2.relayUrl, getToken: getAccessToken });
 }
 function fetchLive() {
-  return makeFetchLive({ relayUrl: config2.relayUrl, getToken: getAccessToken });
+  return makeFetchLive({ relayUrl: config2.relayUrl, getToken: getAccessToken, sessionId: config2.sessionId });
 }
 async function codeContext({ cwd: cwd2 = process.cwd(), collabId } = {}) {
   await ensureSessionId();
@@ -16771,16 +16886,16 @@ async function codeContext({ cwd: cwd2 = process.cwd(), collabId } = {}) {
   } catch (e) {
     return { active: false, reason: e.message };
   }
-  const mine = (c.members || []).find((m) => m.session_id === config2.sessionId && m.status === "joined");
+  const mine = (c.members || []).find((m) => m.status === "joined" && memberHasSession(m, config2.sessionId));
   if (!mine) return { active: false, reason: "Diese Session ist im Collab nicht (mehr) eingetragen." };
   const r = relay();
   let state;
   try {
-    state = await r.get(`/v1/collabs/${encodeURIComponent(c.collab_id)}/code`);
+    state = await r.get(`/v1/collabs/${encodeURIComponent(c.collab_id)}/code?session=${encodeURIComponent(config2.sessionId)}`);
   } catch (e) {
     return { active: false, reason: e.message };
   }
-  const meCode = (state.members || []).find((m) => m.subject === mine.subject);
+  const meCode = codeEntryFor(state.members, mine.subject, config2.sessionId);
   return {
     active: Boolean(state.code && meCode && local && local.collab === c.collab_id && local.base === state.code.base),
     joined: Boolean(meCode),
@@ -16956,12 +17071,24 @@ async function handleCodeTool(name, args = {}) {
   switch (name) {
     case "collab_code_start": {
       const ctx = await ctxOrThrow(args, { needActive: false });
-      const r = await start(relay(), { cwd: cwd(), collabId: ctx.collabId, me: ctx.me, mandate: args.mandate || {} });
+      const r = await start(relay(), {
+        cwd: cwd(),
+        collabId: ctx.collabId,
+        me: ctx.me,
+        mandate: args.mandate || {},
+        sessionId: ctx.sessionId
+      });
       return text(`Code-Austausch an: ${r.repo} ${r.branch}, Basis ${r.base.slice(0, 7)}. Die anderen treten mit collab_code_join bei.`);
     }
     case "collab_code_join": {
       const ctx = await ctxOrThrow(args, { needActive: false });
-      const r = await join3(relay(), { cwd: cwd(), collabId: ctx.collabId, me: ctx.me, mandate: args.mandate || {} });
+      const r = await join3(relay(), {
+        cwd: cwd(),
+        collabId: ctx.collabId,
+        me: ctx.me,
+        mandate: args.mandate || {},
+        sessionId: ctx.sessionId
+      });
       const s = await sync(relay(), { cwd: cwd(), collabId: ctx.collabId, me: ctx.me, mandate: r.mandate, sessionId: ctx.sessionId, fetchLive: fetchLive() });
       return text(`Beigetreten (${r.repo} ${r.branch}, Basis ${r.base.slice(0, 7)}, Mandat ${r.mandate.apply}).
 ${reportText(s.report, ctx.names)}${await memoryText(ctx)}`);
@@ -16972,7 +17099,7 @@ ${reportText(s.report, ctx.names)}${await memoryText(ctx)}`);
     }
     case "collab_code_status": {
       const ctx = await ctxOrThrow(args, { needActive: false });
-      return json(await status(ctx.relay, { cwd: cwd(), collabId: ctx.collabId, me: ctx.me }));
+      return json(await status(ctx.relay, { cwd: cwd(), collabId: ctx.collabId, me: ctx.me, sessionId: ctx.sessionId }));
     }
     case "collab_code_sync": {
       const ctx = await ctxOrThrow(args);
@@ -17024,7 +17151,7 @@ ${reportText(s.report, ctx.names)}${await memoryText(ctx)}`);
     }
     case "collab_code_rebase": {
       const ctx = await ctxOrThrow(args, { needActive: false });
-      const r = await rebase(ctx.relay, { cwd: cwd(), collabId: ctx.collabId, me: ctx.me });
+      const r = await rebase(ctx.relay, { cwd: cwd(), collabId: ctx.collabId, me: ctx.me, sessionId: ctx.sessionId });
       if (!r.moved) return text("Schon auf der aktuellen Basis.");
       if (r.carried && !r.clean) return text(`Auf Basis ${r.base.slice(0, 7)} gewechselt. Deine \xC4nderungen kollidieren dort in: ${r.conflicts.join(", ")} -- bitte l\xF6sen.`);
       return text(`Auf Basis ${r.base.slice(0, 7)} gewechselt.`);

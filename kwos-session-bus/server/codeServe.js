@@ -54,24 +54,42 @@ export function relayAdapter({ relayUrl, getToken, fetchImpl = fetch }) {
 }
 
 /**
+ * The git pass-through URL of one TARGET address. `session` names the serving session (a person may
+ * serve from two boxes), and without it the relay falls back to the person's newest session.
+ */
+export function gitFetchUrl(relayUrl, collabId, member, sessionId = null) {
+  const target = typeof member === "string" ? { subject: member } : member;
+  const session = sessionId ?? target?.sessionId ?? target?.session_id ?? null;
+  const path = `${relayUrl}/v1/collabs/${enc(collabId)}/git/${enc(target?.subject)}`;
+  return session ? `${path}?session=${enc(session)}` : path;
+}
+
+/**
  * `git fetch` of a member's snapshot through the relay. The bearer travels in `http.extraHeader`
  * set through GIT_CONFIG_* in the ENVIRONMENT -- a `-c` on the command line would put the token
  * into every process listing on the machine.
+ *
+ * `sessionId` is THIS address: the relay compares it with the session it handed the request to, so
+ * two sessions of one person can serve two projects without answering each other's fetches.
  */
-export function makeFetchLive({ relayUrl, getToken }) {
+export function makeFetchLive({ relayUrl, getToken, sessionId = null }) {
   return async (ctx, collabId, member) => {
     const token = await getToken();
-    const url = `${relayUrl}/v1/collabs/${enc(collabId)}/git/${enc(member)}`;
-    const env = {
-      GIT_CONFIG_COUNT: "2",
-      GIT_CONFIG_KEY_0: "http.extraHeader",
-      GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
-      GIT_CONFIG_KEY_1: "credential.helper",
-      GIT_CONFIG_VALUE_1: "",
-    };
-    const r = await git(ctx.top, ["fetch", "-q", "--no-tags", "--no-write-fetch-head", url, `+${outRef(collabId)}:${inRef(collabId, member)}`], { env, timeoutMs: 60000 });
+    const target = typeof member === "string" ? { subject: member } : member;
+    const url = gitFetchUrl(relayUrl, collabId, target);
+    const config = [
+      ["http.extraHeader", `Authorization: Bearer ${token}`],
+      ["credential.helper", ""],
+      ...(sessionId ? [["http.extraHeader", `X-Kwcollab-Session: ${sessionId}`]] : []),
+    ];
+    const env = { GIT_CONFIG_COUNT: String(config.length) };
+    config.forEach(([key, value], i) => {
+      env[`GIT_CONFIG_KEY_${i}`] = key;
+      env[`GIT_CONFIG_VALUE_${i}`] = value;
+    });
+    const r = await git(ctx.top, ["fetch", "-q", "--no-tags", "--no-write-fetch-head", url, `+${outRef(collabId)}:${inRef(collabId, target.subject)}`], { env, timeoutMs: 60000 });
     if (r.code !== 0) throw new Error(`live fetch failed: ${r.stderr.trim().replace(token, "***")}`);
-    return gitText(ctx.top, ["rev-parse", inRef(collabId, member)]);
+    return gitText(ctx.top, ["rev-parse", inRef(collabId, target.subject)]);
   };
 }
 
@@ -184,8 +202,11 @@ export async function answerServeFrame(top, collabId, frame) {
  * Hold the back channel open for as long as `signal` is not aborted. Every `event: request` frame
  * is answered by `upload-pack`; a failure answers with a status the relay passes on as 502.
  */
-export async function startServing({ relayUrl, getToken, collabId, top, signal, runSse, fetchImpl = fetch, onError = () => {} }) {
-  const url = `${relayUrl}/v1/collabs/${enc(collabId)}/code/serve`;
+export async function startServing({ relayUrl, getToken, collabId, sessionId = null, top, signal, runSse, fetchImpl = fetch, onError = () => {} }) {
+  // The back channel belongs to THIS session: two sessions of one person serve two projects, and a
+  // stream without the address would be handed the other one's git requests.
+  const query = sessionId ? `?session=${enc(sessionId)}` : "";
+  const url = `${relayUrl}/v1/collabs/${enc(collabId)}/code/serve${query}`;
   await runSse(async (data, event) => {
     if (event !== "request") return;
     let frame;
@@ -202,9 +223,14 @@ export async function startServing({ relayUrl, getToken, collabId, top, signal, 
     }
     try {
       const token = await getToken();
-      await fetchImpl(`${relayUrl}/v1/collabs/${enc(collabId)}/code/serve/${frame.rid}`, {
+      await fetchImpl(`${relayUrl}/v1/collabs/${enc(collabId)}/code/serve/${frame.rid}${query}`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream", "X-Kwcollab-Status": String(status) },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/octet-stream",
+          "X-Kwcollab-Status": String(status),
+          ...(sessionId ? { "X-Kwcollab-Session": sessionId } : {}),
+        },
         body: payload,
       });
     } catch (e) { onError(e); }
