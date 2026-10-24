@@ -10,6 +10,11 @@ process.env.KWOS_CLIENT_ID = "test-client";
 const { config } = await import("../server/config.js");
 const collab = await import("../server/collab.js");
 
+// The session's own id, as the launcher wrote it. Explicit on purpose: membership is decided per
+// ADDRESS since WI 11551159, and a session without an id is in no channel -- the old test only
+// passed because both sides were `undefined`.
+config.sessionId = config.sessionId ?? "sess-self";
+
 const jsonResponse = (body, status = 200) =>
   Promise.resolve({
     ok: status < 400,
@@ -344,11 +349,14 @@ test("declineCollab: POST ohne Rumpf auf die decline-Route", async () => {
   } finally { mock.restore(); }
 });
 
-test("leaveCollab: ohne Zusammenfassung kein Rumpf-Feld, mit ihr schon", async () => {
+test("leaveCollab: die ADRESSE geht, nicht die ganze Person -- ohne Zusammenfassung kein summary-Feld", async () => {
   const mock = installFetchMock(() => jsonResponse({ left: true }, 200));
   try {
     await collab.leaveCollab("c-1");
-    assert.equal(mock.calls[0].init.body, undefined);
+    // The session id rides along since WI 11551159: the relay drops that address and leaves the
+    // person (and a second box of theirs) in the channel.
+    assert.equal(JSON.parse(mock.calls[0].init.body).session_id, config.sessionId);
+    assert.equal(JSON.parse(mock.calls[0].init.body).summary, undefined);
     await collab.leaveCollab("c-1", "Befund steht im Workitem.");
     assert.equal(JSON.parse(mock.calls[1].init.body).summary, "Befund steht im Workitem.");
   } finally { mock.restore(); }

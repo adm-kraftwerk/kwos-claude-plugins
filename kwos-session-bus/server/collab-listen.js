@@ -114,10 +114,23 @@ const JOINED_LINE = /^(\S+) joined$/;
  */
 export const LEAD_JOIN_NOTE = "(du leitest diesen Kanal)";
 
+/**
+ * Does this line name THIS address? The short form of a session id (its first eight characters) is
+ * what a person can type; "@" in front keeps an id that happens to appear in a commit hash from
+ * counting as a call.
+ */
+export function mentionsSession(text, sessionId) {
+  if (typeof text !== "string" || !sessionId) return false;
+  const short = String(sessionId).slice(0, 8);
+  return new RegExp(`@${short}\\b`, "i").test(text) || text.includes(`@${sessionId}`);
+}
+
 /** This session's own member row in a channel, or null when the list does not name it. */
 function ownMember(members, selfSessionId) {
   if (!selfSessionId) return null;
-  return members.find((m) => m && m.session_id === selfSessionId && m.status === "joined") ?? null;
+  // Per ADDRESS (WI 11551159): the member row is the person, `sessions` are their addresses, and a
+  // person may have more than one. The old single column stays as the fallback for an older relay.
+  return members.find((m) => m && m.status === "joined" && collab.memberHasSession(m, selfSessionId)) ?? null;
 }
 
 /**
@@ -134,7 +147,7 @@ function systemText(text, members, selfSessionId) {
   return `${text.trim()} ${LEAD_JOIN_NOTE}`;
 }
 
-export function frameToLine(raw, { members = [], selfSessionId = null, collabId = null, after = 0, wakeOnCode = true } = {}) {
+export function frameToLine(raw, { members = [], selfSessionId = null, selfSubject = null, collabId = null, after = 0, wakeOnCode = true } = {}) {
   let msg;
   try { msg = JSON.parse(raw); } catch { return null; }
   if (!msg || typeof msg !== "object") return null;
@@ -146,6 +159,14 @@ export function frameToLine(raw, { members = [], selfSessionId = null, collabId 
   // The session id alone is NOT enough (s. the file header): the relay stamps a HUMAN message from
   // this pane's channel view with THIS session's id. Only the agent's own contributions go back.
   if (selfSessionId && msg.from_session === selfSessionId && msg.author_kind !== "human") return null;
+  // A SIBLING SESSION OF THE SAME PERSON DOES NOT WAKE THIS ONE (WI 11551159). The two addresses
+  // share one owner, and letting each wake the other is exactly the ping-pong the prompt forbids:
+  // one human line would produce two answers, then four. The line stays VISIBLE in every surface
+  // (the channel view reads the relay, not this monitor); it is only not injected as new input.
+  // An explicit mention of this address is the exception -- that is the person asking for it.
+  if (selfSubject && msg.from_subject === selfSubject && msg.from_session
+      && msg.from_session !== selfSessionId && msg.author_kind !== "human"
+      && !mentionsSession(msg.text, selfSessionId)) return null;
   // AND A LINE WE RELAYED AS THE HUMAN IS ONE OF OUR OWN (field report 2026-10-20). It is stamped
   // `human` on purpose (the pause counter has to see the human speaking), so the line above keeps
   // it -- and the session read its own sentence back and answered it: "Echo meiner eigenen Zeile,
@@ -299,7 +320,7 @@ export async function startCollabListener({ writeLine, stdin = process.stdin, is
       // `lastSeq` is the SSE cursor (written to disk, advanced by every id). `printedSeq` is what
       // the session has already SEEN, and only a printed line advances it: the id arrives before
       // the message, so deduplicating against the cursor would swallow the frame it belongs to.
-      const entry = { controller, members, lastSeq: readCursor(c.collab_id) ?? 0 };
+      const entry = { controller, members, lastSeq: readCursor(c.collab_id, config.sessionId) ?? 0 };
       entry.printedSeq = entry.lastSeq;
       open.set(c.collab_id, entry);
       await code?.refresh(c.collab_id, entry);
@@ -307,7 +328,11 @@ export async function startCollabListener({ writeLine, stdin = process.stdin, is
       runSseReceiver(
         (raw) => {
           const lines = frameToLine(raw, {
-            members: entry.members, selfSessionId: config.sessionId, collabId: c.collab_id,
+            members: entry.members, selfSessionId: config.sessionId,
+            // Which PERSON this address belongs to: a line of the owner's other session is not a
+            // reason to wake up (WI 11551159, see frameToLine).
+            selfSubject: ownMember(entry.members, config.sessionId)?.subject ?? null,
+            collabId: c.collab_id,
             // Already printed in THIS process: a reconnect must not repeat a line (the receiver
             // resumes by `Last-Event-ID`, this is the second belt for a frame that arrives twice).
             after: entry.printedSeq,
@@ -331,7 +356,7 @@ export async function startCollabListener({ writeLine, stdin = process.stdin, is
             const seq = Number(id);
             if (!Number.isFinite(seq) || seq <= entry.lastSeq) return;
             entry.lastSeq = seq;
-            rememberCursor(c.collab_id, seq);
+            rememberCursor(c.collab_id, seq, config.sessionId);
           },
         }
       ).catch((err) => {

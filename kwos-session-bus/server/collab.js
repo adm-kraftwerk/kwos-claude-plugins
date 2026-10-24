@@ -43,23 +43,38 @@ export async function declineCollab(collabId) {
 /** POST /v1/collabs/{id}/leave -- detach, always allowed. */
 export async function leaveCollab(collabId, summary) {
   const path = `/v1/collabs/${encodeURIComponent(collabId)}/leave`;
-  // Two shapes on purpose: `call()` serialises whatever it is given, so an empty object would go
-  // out as "{}" -- and "{}" is not the same statement as "no body at all" for a route that reads
-  // the summary out of it.
-  const { data } = await call(path, summary ? { method: "POST", body: { summary } } : { method: "POST" });
+  // THIS ADDRESS leaves, not the whole person (WI 11551159): the relay has a row per session since
+  // sessions are addresses under a member. Sending the id is what keeps a second box of the same
+  // person in the channel -- and it is also how a web participant (which has no session) stays on
+  // the old person-wide shape, because its id is simply absent.
+  const body = { ...(config.sessionId ? { session_id: config.sessionId } : {}), ...(summary ? { summary } : {}) };
+  const { data } = await call(path, Object.keys(body).length > 0
+    ? { method: "POST", body }
+    : { method: "POST" });
   return data ?? {};
 }
 
 /**
  * The collabs THIS session is joined to. A person may be in several collabs at once (two
- * workitems, two colleagues) -- and their other session may be in the same one. The member row's
- * session_id is what tells them apart, not the subject.
+ * workitems, two colleagues) -- and the SAME person may have several sessions in one of them.
+ *
+ * The answer is per ADDRESS (WI 11551159): the relay hands out `sessions` per member, and this
+ * session is in a channel when its own id is among them. Reading `member.session_id` alone was the
+ * column for "who bound last", so a second session took the channel away from the first.
  */
 export async function myJoinedCollabs() {
   const all = await listCollabs();
   return all.filter((c) => c.my_status === "joined"
     && Array.isArray(c.members)
-    && c.members.some((m) => m.session_id === config.sessionId && m.status === "joined"));
+    && c.members.some((m) => m.status === "joined" && memberHasSession(m, config.sessionId)));
+}
+
+/** Is this member in the channel with exactly this session? Falls back to the old single column. */
+export function memberHasSession(member, sessionId) {
+  if (!member || !sessionId) return false;
+  const sessions = Array.isArray(member.sessions) ? member.sessions : null;
+  if (sessions) return sessions.some((s) => s?.session_id === sessionId);
+  return member.session_id === sessionId;
 }
 
 /** The invitations addressed to this login that nobody has answered yet. */

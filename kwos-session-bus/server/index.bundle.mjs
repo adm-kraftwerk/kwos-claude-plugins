@@ -15955,7 +15955,13 @@ async function acceptCollab(collabId, { mode } = {}) {
 }
 async function myJoinedCollabs() {
   const all = await listCollabs();
-  return all.filter((c) => c.my_status === "joined" && Array.isArray(c.members) && c.members.some((m) => m.session_id === config2.sessionId && m.status === "joined"));
+  return all.filter((c) => c.my_status === "joined" && Array.isArray(c.members) && c.members.some((m) => m.status === "joined" && memberHasSession(m, config2.sessionId)));
+}
+function memberHasSession(member, sessionId) {
+  if (!member || !sessionId) return false;
+  const sessions = Array.isArray(member.sessions) ? member.sessions : null;
+  if (sessions) return sessions.some((s) => s?.session_id === sessionId);
+  return member.session_id === sessionId;
 }
 async function myInvitations() {
   const all = await listCollabs();
@@ -16771,16 +16777,16 @@ async function codeContext({ cwd: cwd2 = process.cwd(), collabId } = {}) {
   } catch (e) {
     return { active: false, reason: e.message };
   }
-  const mine = (c.members || []).find((m) => m.session_id === config2.sessionId && m.status === "joined");
+  const mine = (c.members || []).find((m) => m.status === "joined" && memberHasSession(m, config2.sessionId));
   if (!mine) return { active: false, reason: "Diese Session ist im Collab nicht (mehr) eingetragen." };
   const r = relay();
   let state;
   try {
-    state = await r.get(`/v1/collabs/${encodeURIComponent(c.collab_id)}/code`);
+    state = await r.get(`/v1/collabs/${encodeURIComponent(c.collab_id)}/code?session=${encodeURIComponent(config2.sessionId)}`);
   } catch (e) {
     return { active: false, reason: e.message };
   }
-  const meCode = (state.members || []).find((m) => m.subject === mine.subject);
+  const meCode = (state.members || []).find((m) => m.subject === mine.subject && m.session_id === config2.sessionId) || (state.members || []).find((m) => m.subject === mine.subject);
   return {
     active: Boolean(state.code && meCode && local && local.collab === c.collab_id && local.base === state.code.base),
     joined: Boolean(meCode),

@@ -39,14 +39,18 @@ export async function codeContext({ cwd = process.cwd(), collabId } = {}) {
   let c;
   try { c = await collab.resolveCollab(collabId || local?.collab || (await codeCollabFor(cwd)) || undefined); }
   catch (e) { return { active: false, reason: e.message }; }
-  const mine = (c.members || []).find((m) => m.session_id === config.sessionId && m.status === "joined");
+  const mine = (c.members || []).find((m) => m.status === "joined" && collab.memberHasSession(m, config.sessionId));
   if (!mine) return { active: false, reason: "Diese Session ist im Collab nicht (mehr) eingetragen." };
   const r = relay();
   let state;
-  try { state = await r.get(`/v1/collabs/${encodeURIComponent(c.collab_id)}/code`); } catch (e) {
+  try { state = await r.get(`/v1/collabs/${encodeURIComponent(c.collab_id)}/code?session=${encodeURIComponent(config.sessionId)}`); } catch (e) {
     return { active: false, reason: e.message };
   }
-  const meCode = (state.members || []).find((m) => m.subject === mine.subject);
+  // The code state belongs to THIS address (WI 11551159): `state.members` carries one entry per
+  // session, and two sessions of one person may be on two projects. Matching by subject alone
+  // handed a session its sibling's plane, mandate and head.
+  const meCode = (state.members || []).find((m) => m.subject === mine.subject && m.session_id === config.sessionId)
+    || (state.members || []).find((m) => m.subject === mine.subject);
   return {
     active: Boolean(state.code && meCode && local && local.collab === c.collab_id && local.base === state.code.base),
     joined: Boolean(meCode),

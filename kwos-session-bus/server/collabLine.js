@@ -172,10 +172,20 @@ export function collabClosedLine(collabId) {
 /**
  * The readable name of the sender: the display name once the person has joined (XID `name`), the
  * login before that. A channel line that shows an opaque login is legible only to machines.
+ *
+ * WHEN THE PERSON IS IN TWICE, THE ADDRESS IS NAMED (WI 11551159): the same human with a second
+ * session is two working states, and a line that says only "Steffen" leaves the reader guessing
+ * which one spoke. The mark is the short form of the session id -- short because it sits in a head
+ * with a hard budget, and marked as an address by the `#`.
  */
 export function senderName(message, members) {
   const subject = message?.from_subject;
   if (subject === "relay") return "kwcollab";
   const m = (members || []).find((x) => x.subject === subject);
-  return m?.display_name || subject || "?";
+  const name = m?.display_name || subject || "?";
+  const sessions = Array.isArray(m?.sessions) ? m.sessions : [];
+  if (sessions.length > 1 && message?.from_session) {
+    return `${name} #${String(message.from_session).slice(0, 8)}`;
+  }
+  return name;
 }
