@@ -70,8 +70,28 @@ export async function localContext(cwd, collabId) {
   return { ...info, state };
 }
 
-async function codeState(relay, collabId) {
-  return relay.get(`/v1/collabs/${enc(collabId)}/code`);
+/**
+ * The channel's code state AS THIS AGENT SEES IT. The session goes along, so `code` and `members`
+ * describe this agent's own plane -- without it the relay answers for the person's last-bound
+ * agent, which may be on another repository (two agents of one person, STREAM and BC).
+ */
+async function codeState(relay, collabId, sessionId = null) {
+  const q = sessionId ? `?session=${enc(sessionId)}` : "";
+  return relay.get(`/v1/collabs/${enc(collabId)}/code${q}`);
+}
+
+/**
+ * The plane this worktree belongs to: same repository and, when the channel has several planes on
+ * it, the same branch. Null when the channel has none for this project yet.
+ */
+export function planeForWorktree(cur, repo, branch) {
+  const planes = Array.isArray(cur?.planes) ? cur.planes : [];
+  const forRepo = planes.filter((p) => p.repo === repo);
+  if (forRepo.length === 0) {
+    // A relay from before planes answers only `code` -- one project per channel.
+    return cur?.code && cur.code.repo === repo ? { ...cur.code, id: null } : null;
+  }
+  return forRepo.find((p) => p.branch === branch) || (forRepo.length === 1 ? forRepo[0] : null);
 }
 
 // The base must be in the local object store before anything can build on it.
@@ -113,12 +133,20 @@ export async function start(relay, { cwd, collabId, me, mandate, sessionId }) {
 /** Member: enter code mode. Same repository, base fetched from origin, then everyone's state in. */
 export async function join(relay, { cwd, collabId, me, mandate, sessionId }) {
   const ctx = await localContext(cwd, collabId);
-  const cur = await codeState(relay, collabId);
-  if (!cur.code) throw new Error("Der Code-Modus ist in diesem Collab noch nicht eingeschaltet.");
-  if (cur.code.repo !== ctx.repo) throw new Error(`Dieser Collab arbeitet in ${cur.code.repo}, dieser Worktree in ${ctx.repo}.`);
+  const cur = await codeState(relay, collabId, sessionId);
+  // The plane of THIS repository -- a channel may carry several projects, one per plane.
+  const plane = planeForWorktree(cur, ctx.repo, ctx.branch);
+  if (!plane) {
+    const known = (Array.isArray(cur?.planes) ? cur.planes : []).map((p) => `${p.repo} ${p.branch}`).join(", ");
+    throw new Error(known
+      ? `Fuer ${ctx.repo} laeuft in diesem Collab noch kein Code-Austausch (laufend: ${known}). collab_code_start oeffnet ihn fuer dieses Projekt.`
+      : "Der Code-Modus ist in diesem Collab noch nicht eingeschaltet.");
+  }
+  // The branch goes along: two planes on one repository (two branches) are ambiguous without it.
   const res = await relay.put(`/v1/collabs/${enc(collabId)}/code/mandate`, {
-    repo: ctx.repo, mandate, ...(sessionId ? { session_id: sessionId } : {}),
+    repo: ctx.repo, branch: plane.branch, mandate, ...(sessionId ? { session_id: sessionId } : {}),
   });
+  cur.code = { repo: plane.repo, branch: plane.branch, base: plane.base };
   await ensureBase(ctx.top, cur.code.branch, cur.code.base);
   if (!(await isAncestor(ctx.top, cur.code.base, ctx.head)) && !(await isAncestor(ctx.top, ctx.head, cur.code.base))) {
     throw new Error(`Dieser Worktree steht nicht auf der Basis ${cur.code.base.slice(0, 7)} (${cur.code.branch}). Erst \`git checkout ${cur.code.branch}\` bzw. auf die Basis wechseln.`);
@@ -214,7 +242,7 @@ export async function sync(relay, { cwd, collabId, me, mandate, sessionId, fetch
   const ctx = await localContext(cwd, collabId);
   let st = ctx.state;
   if (!st) throw new Error("Dieser Worktree ist nicht im Code-Modus (erst start/join).");
-  const cur = await codeState(relay, collabId);
+  const cur = await codeState(relay, collabId, sessionId);
   if (!cur.code) throw new Error("Der Code-Modus ist in diesem Collab aus.");
   if (cur.code.base !== st.base) {
     return { rebase: true, base: cur.code.base, report: [{ kind: "rebase", base: cur.code.base }] };
@@ -406,10 +434,10 @@ export async function checkpoint(relay, { cwd, collabId, me, mandate, message, c
  * Safe only when everything this worktree had published is contained in the checkpoint (the
  * checkpoint was made after integrating it). Unpublished edits stay as a diff on top.
  */
-export async function rebase(relay, { cwd, collabId, me }) {
+export async function rebase(relay, { cwd, collabId, me, sessionId = null }) {
   const ctx = await localContext(cwd, collabId);
   const st = ctx.state;
-  const cur = await codeState(relay, collabId);
+  const cur = await codeState(relay, collabId, sessionId);
   if (!cur.code || !st) throw new Error("Nicht im Code-Modus.");
   if (cur.code.base === st.base) return { moved: false, base: st.base };
   const f = await git(ctx.top, ["fetch", "-q", "--no-tags", "origin", cur.code.branch]);
@@ -438,7 +466,7 @@ export async function rebase(relay, { cwd, collabId, me }) {
 
 /** Where everybody stands, for the status tool and the surfaces. */
 export async function status(relay, { cwd, collabId, me, sessionId }) {
-  const cur = await codeState(relay, collabId);
+  const cur = await codeState(relay, collabId, sessionId);
   let local = null;
   try {
     const ctx = await localContext(cwd, collabId);

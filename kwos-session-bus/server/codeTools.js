@@ -259,7 +259,7 @@ export async function handleCodeTool(name, args = {}) {
     }
     case "collab_code_rebase": {
       const ctx = await ctxOrThrow(args, { needActive: false });
-      const r = await flow.rebase(ctx.relay, { cwd: cwd(), collabId: ctx.collabId, me: ctx.me });
+      const r = await flow.rebase(ctx.relay, { cwd: cwd(), collabId: ctx.collabId, me: ctx.me, sessionId: ctx.sessionId });
       if (!r.moved) return text("Schon auf der aktuellen Basis.");
       if (r.carried && !r.clean) return text(`Auf Basis ${r.base.slice(0, 7)} gewechselt. Deine Änderungen kollidieren dort in: ${r.conflicts.join(", ")} -- bitte lösen.`);
       return text(`Auf Basis ${r.base.slice(0, 7)} gewechselt.`);

@@ -119,10 +119,27 @@ export const LEAD_JOIN_NOTE = "(du leitest diesen Kanal)";
  * what a person can type; "@" in front keeps an id that happens to appear in a commit hash from
  * counting as a call.
  */
-export function mentionsSession(text, sessionId) {
+export function mentionsSession(text, sessionId, repo = null) {
   if (typeof text !== "string" || !sessionId) return false;
-  const short = String(sessionId).slice(0, 8);
-  return new RegExp(`@${short}\\b`, "i").test(text) || text.includes(`@${sessionId}`);
+  // The SAME spellings the sender mark shows (`Name @<repo> #<8 chars>`): a reader quotes what it
+  // sees. The session as `#<short>` or `@<short>` (or in full), the repository as `@<repo-short>`.
+  // Plain substring tests, no RegExp: a session id is not ours to trust as a pattern, and a word
+  // boundary fails when the id goes on with word characters past the eighth.
+  const lower = text.toLowerCase();
+  const id = String(sessionId).toLowerCase();
+  const short = id.slice(0, 8);
+  if (lower.includes(`#${short}`) || lower.includes(`@${short}`) || lower.includes(id)) return true;
+  const repoShort = typeof repo === "string" && repo ? repo.split("/").pop().toLowerCase() : "";
+  if (!repoShort) return false;
+  const at = `@${repoShort}`;
+  let i = lower.indexOf(at);
+  while (i !== -1) {
+    // `@bc` must not match inside `@bcx`: the next character ends the name.
+    const next = lower.charAt(i + at.length);
+    if (!next || !/[a-z0-9._-]/.test(next)) return true;
+    i = lower.indexOf(at, i + 1);
+  }
+  return false;
 }
 
 /** This session's own member row in a channel, or null when the list does not name it. */
@@ -147,7 +164,7 @@ function systemText(text, members, selfSessionId) {
   return `${text.trim()} ${LEAD_JOIN_NOTE}`;
 }
 
-export function frameToLine(raw, { members = [], selfSessionId = null, selfSubject = null, collabId = null, after = 0, wakeOnCode = true } = {}) {
+export function frameToLine(raw, { members = [], selfSessionId = null, selfSubject = null, selfRepo = null, collabId = null, after = 0, wakeOnCode = true } = {}) {
   let msg;
   try { msg = JSON.parse(raw); } catch { return null; }
   if (!msg || typeof msg !== "object") return null;
@@ -164,9 +181,13 @@ export function frameToLine(raw, { members = [], selfSessionId = null, selfSubje
   // one human line would produce two answers, then four. The line stays VISIBLE in every surface
   // (the channel view reads the relay, not this monitor); it is only not injected as new input.
   // An explicit mention of this address is the exception -- that is the person asking for it.
+  //
+  // HUMAN LINES TOO: a sentence the person typed in the OTHER pane's channel view is stamped with
+  // that pane's session and goes to that pane's agent. Waking this one as well is the same two
+  // answers to one sentence. The person reaches this agent through this pane, or by naming it.
   if (selfSubject && msg.from_subject === selfSubject && msg.from_session
-      && msg.from_session !== selfSessionId && msg.author_kind !== "human"
-      && !mentionsSession(msg.text, selfSessionId)) return null;
+      && msg.from_session !== selfSessionId
+      && !mentionsSession(msg.text, selfSessionId, selfRepo)) return null;
   // AND A LINE WE RELAYED AS THE HUMAN IS ONE OF OUR OWN (field report 2026-10-20). It is stamped
   // `human` on purpose (the pause counter has to see the human speaking), so the line above keeps
   // it -- and the session read its own sentence back and answered it: "Echo meiner eigenen Zeile,
@@ -332,6 +353,9 @@ export async function startCollabListener({ writeLine, stdin = process.stdin, is
             // Which PERSON this address belongs to: a line of the owner's other session is not a
             // reason to wake up (WI 11551159, see frameToLine).
             selfSubject: ownMember(entry.members, config.sessionId)?.subject ?? null,
+            // This agent's repository, so `@<repo>` in a sibling's line counts as a call to it.
+            selfRepo: (ownMember(entry.members, config.sessionId)?.agents || [])
+              .find((a) => a?.session_id === config.sessionId)?.repo ?? null,
             collabId: c.collab_id,
             // Already printed in THIS process: a reconnect must not repeat a line (the receiver
             // resumes by `Last-Event-ID`, this is the second belt for a frame that arrives twice).
@@ -388,6 +412,9 @@ export async function startCollabListener({ writeLine, stdin = process.stdin, is
       log.error("Session-ID konnte nicht neu gelesen werden.", { error: String(err) });
     }
     if (config.sessionId === boundId) return;
+    // The id this process HAD: the relay moves its agent's code state to the new id and removes
+    // the old row (`replaces`), instead of guessing the predecessor and keeping a ghost agent.
+    const replaced = boundId;
     boundId = config.sessionId;
     // The streams belonged to the OLD id -- and so does the member row on the relay: after /clear
     // this session is joined to NOTHING until it says so again (`myJoinedCollabs` filters on the
@@ -405,7 +432,7 @@ export async function startCollabListener({ writeLine, stdin = process.stdin, is
     closeAll();
     for (const id of was) {
       try {
-        await collab.acceptCollab(id);
+        await collab.acceptCollab(id, { replaces: replaced });
       } catch (err) {
         // Not fatal (the next poll simply finds no channel), but LOUD: this is the one failure a
         // person cannot see for themselves -- the channel just looks empty.

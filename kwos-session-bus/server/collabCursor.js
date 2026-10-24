@@ -39,13 +39,15 @@ export function cursorsPath(env = process.env) {
  * MIGRATION. Cursors were kept per CHANNEL before they became per session, and the file stays on
  * disk across the update. Without the fallback every session would start at zero and replay the
  * whole protocol once -- the very thing this file exists to prevent. The old channel-only key is
- * therefore read exactly once, as this session's starting point; `rememberCursor` then writes the
- * session key as usual and the old one is never consulted again (it stays until the bound drops it).
+ * therefore handed to exactly ONE session as its starting point and then retired: the first
+ * session-keyed write for that channel deletes it. Otherwise every later session id (a /clear, a
+ * second pane) would start at the frozen pre-update stand and silently skip what came before it.
  */
 export function readCursor(collabId, sessionId = null, path = cursorsPath()) {
   const all = readAll(path);
   const seq = Number(all[cursorKey(collabId, sessionId)]);
   if (Number.isFinite(seq) && seq > 0) return seq;
+  if (!sessionId) return null;
   const legacy = Number(all[String(collabId)]);
   return Number.isFinite(legacy) && legacy > 0 ? legacy : null;
 }
@@ -59,8 +61,12 @@ export function rememberCursor(collabId, seq, sessionId = null, path = cursorsPa
   if (!Number.isFinite(n) || n <= 0) return;
   const all = readAll(path);
   const key = cursorKey(collabId, sessionId);
-  if (Number(all[key]) >= n) return;
-  all[key] = n;
+  // The migration key has done its one job the moment a session writes its own (see readCursor).
+  const legacyKey = String(collabId);
+  const retire = sessionId && key !== legacyKey && legacyKey in all;
+  if (Number(all[key]) >= n && !retire) return;
+  if (retire) delete all[legacyKey];
+  if (!(Number(all[key]) >= n)) all[key] = n;
   // Bounded: the oldest channels go first (a Map keeps insertion order).
   const keys = Object.keys(all);
   for (const key of keys.slice(0, Math.max(0, keys.length - MAX_CHANNELS))) delete all[key];

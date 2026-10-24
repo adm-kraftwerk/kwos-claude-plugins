@@ -479,9 +479,13 @@ test("nach einem Session-Wechsel nimmt der Monitor seine Kanaele neu an", async 
   const tail = src.slice(start, src.indexOf("}, config.sessionIdCheckMs)"));
   const capture = tail.indexOf("const was = ");
   const close = tail.indexOf("closeAll()");
-  const accept = tail.indexOf("collab.acceptCollab(id)");
+  // The re-accept names the id this process HAD (`replaces`): the relay moves that agent's code
+  // state to the new id and removes the old row instead of keeping a ghost agent.
+  const accept = tail.indexOf("collab.acceptCollab(id, { replaces: replaced })");
   assert.ok(capture > 0 && close > capture, "die Kanal-IDs muessen VOR closeAll() gemerkt werden");
   assert.ok(accept > close, "das erneute accept gehoert hinter closeAll()");
+  assert.ok(tail.indexOf("const replaced = boundId;") < tail.indexOf("boundId = config.sessionId;"),
+    "die alte ID muss gemerkt werden, BEVOR boundId ueberschrieben wird");
   // Und nur die eigenen Kanaele: niemals "alles, wo mein Login drin ist" (ein zweites Fenster kann
   // im selben Kanal sein -- ein accept von hier zoege ihm die Mitgliedschaft weg).
   assert.match(tail, /for \(const id of was\)/, "erneut angenommen wird nur, was dieser Monitor offen hatte");

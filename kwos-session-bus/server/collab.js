@@ -50,7 +50,7 @@ async function sessionRepo(cwd) {
  * sender mark and the code exchange both read it). `cwd` is the seam for tests; the session's own
  * working directory is the default.
  */
-export async function acceptCollab(collabId, { mode, cwd = sessionCwd } = {}) {
+export async function acceptCollab(collabId, { mode, cwd = sessionCwd, replaces = null } = {}) {
   const where = await sessionRepo(cwd);
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/accept`, {
     method: "POST",
@@ -59,6 +59,9 @@ export async function acceptCollab(collabId, { mode, cwd = sessionCwd } = {}) {
       ...(where?.repo ? { repo: where.repo } : {}),
       ...(where?.branch ? { branch: where.branch } : {}),
       ...(mode ? { mode } : {}),
+      // The agent this one REPLACES after /clear or --resume: the relay hands its code state over
+      // and removes it, so the person does not read as two agents.
+      ...(replaces && replaces !== config.sessionId ? { replaces } : {}),
     },
   });
   return data ?? {};

@@ -48,8 +48,10 @@ test("migration: an old channel-only cursor counts once for the session -- no ba
   assert.equal(readCursor("c-1", "s-new", old), 17);
   rememberCursor("c-1", 23, "s-new", old);
   assert.equal(readCursor("c-1", "s-new", old), 23);
-  // A different session starts at the old channel stand as well -- it never read the channel.
-  assert.equal(readCursor("c-1", "s-second", old), 17);
+  // The old key is RETIRED by that first session write: a later session id (a /clear, a second
+  // pane) must not start at the frozen pre-update stand and skip everything before it.
+  assert.equal(JSON.parse(readFileSync(old, "utf8"))["c-1"], undefined);
+  assert.equal(readCursor("c-1", "s-second", old), null);
   // And the session key wins once it exists, even when the old one is higher.
   writeFileSync(old, JSON.stringify({ "c-1": 99, "s-new|c-1": 23 }));
   assert.equal(readCursor("c-1", "s-new", old), 23);

@@ -16267,7 +16267,7 @@ async function sessionRepo(cwd2) {
     return null;
   }
 }
-async function acceptCollab(collabId, { mode, cwd: cwd2 = sessionCwd } = {}) {
+async function acceptCollab(collabId, { mode, cwd: cwd2 = sessionCwd, replaces = null } = {}) {
   const where = await sessionRepo(cwd2);
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/accept`, {
     method: "POST",
@@ -16275,7 +16275,10 @@ async function acceptCollab(collabId, { mode, cwd: cwd2 = sessionCwd } = {}) {
       session_id: config2.sessionId,
       ...where?.repo ? { repo: where.repo } : {},
       ...where?.branch ? { branch: where.branch } : {},
-      ...mode ? { mode } : {}
+      ...mode ? { mode } : {},
+      // The agent this one REPLACES after /clear or --resume: the relay hands its code state over
+      // and removes it, so the person does not read as two agents.
+      ...replaces && replaces !== config2.sessionId ? { replaces } : {}
     }
   });
   return data ?? {};
@@ -16419,8 +16422,17 @@ async function localContext(cwd2, collabId) {
   }
   return { ...info, state };
 }
-async function codeState(relay2, collabId) {
-  return relay2.get(`/v1/collabs/${enc(collabId)}/code`);
+async function codeState(relay2, collabId, sessionId = null) {
+  const q = sessionId ? `?session=${enc(sessionId)}` : "";
+  return relay2.get(`/v1/collabs/${enc(collabId)}/code${q}`);
+}
+function planeForWorktree(cur, repo, branch) {
+  const planes = Array.isArray(cur?.planes) ? cur.planes : [];
+  const forRepo = planes.filter((p) => p.repo === repo);
+  if (forRepo.length === 0) {
+    return cur?.code && cur.code.repo === repo ? { ...cur.code, id: null } : null;
+  }
+  return forRepo.find((p) => p.branch === branch) || (forRepo.length === 1 ? forRepo[0] : null);
 }
 async function ensureBase(top, branch, base) {
   const have = await git(top, ["cat-file", "-e", `${base}^{commit}`]);
@@ -16456,14 +16468,19 @@ async function start(relay2, { cwd: cwd2, collabId, me, mandate, sessionId }) {
 }
 async function join3(relay2, { cwd: cwd2, collabId, me, mandate, sessionId }) {
   const ctx = await localContext(cwd2, collabId);
-  const cur = await codeState(relay2, collabId);
-  if (!cur.code) throw new Error("Der Code-Modus ist in diesem Collab noch nicht eingeschaltet.");
-  if (cur.code.repo !== ctx.repo) throw new Error(`Dieser Collab arbeitet in ${cur.code.repo}, dieser Worktree in ${ctx.repo}.`);
+  const cur = await codeState(relay2, collabId, sessionId);
+  const plane = planeForWorktree(cur, ctx.repo, ctx.branch);
+  if (!plane) {
+    const known = (Array.isArray(cur?.planes) ? cur.planes : []).map((p) => `${p.repo} ${p.branch}`).join(", ");
+    throw new Error(known ? `Fuer ${ctx.repo} laeuft in diesem Collab noch kein Code-Austausch (laufend: ${known}). collab_code_start oeffnet ihn fuer dieses Projekt.` : "Der Code-Modus ist in diesem Collab noch nicht eingeschaltet.");
+  }
   const res = await relay2.put(`/v1/collabs/${enc(collabId)}/code/mandate`, {
     repo: ctx.repo,
+    branch: plane.branch,
     mandate,
     ...sessionId ? { session_id: sessionId } : {}
   });
+  cur.code = { repo: plane.repo, branch: plane.branch, base: plane.base };
   await ensureBase(ctx.top, cur.code.branch, cur.code.base);
   if (!await isAncestor(ctx.top, cur.code.base, ctx.head) && !await isAncestor(ctx.top, ctx.head, cur.code.base)) {
     throw new Error(`Dieser Worktree steht nicht auf der Basis ${cur.code.base.slice(0, 7)} (${cur.code.branch}). Erst \`git checkout ${cur.code.branch}\` bzw. auf die Basis wechseln.`);
@@ -16536,7 +16553,7 @@ async function sync(relay2, { cwd: cwd2, collabId, me, mandate, sessionId, fetch
   const ctx = await localContext(cwd2, collabId);
   let st = ctx.state;
   if (!st) throw new Error("Dieser Worktree ist nicht im Code-Modus (erst start/join).");
-  const cur = await codeState(relay2, collabId);
+  const cur = await codeState(relay2, collabId, sessionId);
   if (!cur.code) throw new Error("Der Code-Modus ist in diesem Collab aus.");
   if (cur.code.base !== st.base) {
     return { rebase: true, base: cur.code.base, report: [{ kind: "rebase", base: cur.code.base }] };
@@ -16715,10 +16732,10 @@ ${trailers}` : message]);
   writeState(ctx.gitDir, freshState(collabId, me, sha, st.branch));
   return { sha, branch: st.branch };
 }
-async function rebase(relay2, { cwd: cwd2, collabId, me }) {
+async function rebase(relay2, { cwd: cwd2, collabId, me, sessionId = null }) {
   const ctx = await localContext(cwd2, collabId);
   const st = ctx.state;
-  const cur = await codeState(relay2, collabId);
+  const cur = await codeState(relay2, collabId, sessionId);
   if (!cur.code || !st) throw new Error("Nicht im Code-Modus.");
   if (cur.code.base === st.base) return { moved: false, base: st.base };
   const f = await git(ctx.top, ["fetch", "-q", "--no-tags", "origin", cur.code.branch]);
@@ -16737,7 +16754,7 @@ async function rebase(relay2, { cwd: cwd2, collabId, me }) {
   return { moved: true, base: cur.code.base, carried: wip.tree !== await gitText(ctx.top, ["rev-parse", `${cur.code.base}^{tree}`]), clean: merged.clean, conflicts: merged.conflicts };
 }
 async function status(relay2, { cwd: cwd2, collabId, me, sessionId }) {
-  const cur = await codeState(relay2, collabId);
+  const cur = await codeState(relay2, collabId, sessionId);
   let local = null;
   try {
     const ctx = await localContext(cwd2, collabId);
@@ -17134,7 +17151,7 @@ ${reportText(s.report, ctx.names)}${await memoryText(ctx)}`);
     }
     case "collab_code_rebase": {
       const ctx = await ctxOrThrow(args, { needActive: false });
-      const r = await rebase(ctx.relay, { cwd: cwd(), collabId: ctx.collabId, me: ctx.me });
+      const r = await rebase(ctx.relay, { cwd: cwd(), collabId: ctx.collabId, me: ctx.me, sessionId: ctx.sessionId });
       if (!r.moved) return text("Schon auf der aktuellen Basis.");
       if (r.carried && !r.clean) return text(`Auf Basis ${r.base.slice(0, 7)} gewechselt. Deine \xC4nderungen kollidieren dort in: ${r.conflicts.join(", ")} -- bitte l\xF6sen.`);
       return text(`Auf Basis ${r.base.slice(0, 7)} gewechselt.`);
