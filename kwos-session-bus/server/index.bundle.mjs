@@ -16388,6 +16388,37 @@ async function acquireLease(collabId, { subjectId, subject, section, ttlSec, exc
 async function releaseLease(collabId, leaseId) {
   await call(`/v1/collabs/${encodeURIComponent(collabId)}/leases/${encodeURIComponent(leaseId)}`, { method: "DELETE" });
 }
+async function searchPeople(query) {
+  const q = String(query ?? "").trim();
+  if (q.length < 2) return [];
+  const { data } = await call(`/v1/people?q=${encodeURIComponent(q)}`);
+  return Array.isArray(data?.people) ? data.people : [];
+}
+var foldText = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/ß/g, "ss").toLowerCase();
+function resolveInvitee(people, query) {
+  const q = String(query ?? "").trim();
+  const rows = Array.isArray(people) ? people.filter((p) => p && typeof p.login === "string" && p.login) : [];
+  if (q === "") return { chosen: null, matches: rows };
+  const loginKey = q.toLowerCase();
+  const byLogin = rows.filter((p) => p.login.toLowerCase() === loginKey);
+  if (byLogin.length === 1) return { chosen: byLogin[0], matches: byLogin };
+  const wanted = foldText(q).split(/[\s,]+/).filter(Boolean);
+  const exact = rows.filter((p) => {
+    const words = foldText(p.name ?? p.login).split(/[\s,]+/).filter(Boolean);
+    return words.length === wanted.length && wanted.every((w) => words.includes(w));
+  });
+  if (exact.length === 1) return { chosen: exact[0], matches: exact };
+  const loose = rows.filter((p) => wanted.every((w) => foldText(`${p.name ?? ""} ${p.login}`).includes(w)));
+  return { chosen: null, matches: exact.length > 1 ? exact : loose };
+}
+async function inviteToCollab(collabId, subject, note) {
+  const text2 = typeof note === "string" ? note.trim() : "";
+  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/invites`, {
+    method: "POST",
+    body: { subject, ...text2 ? { note: text2.slice(0, 2e3) } : {}, via: "claude" }
+  });
+  return data ?? {};
+}
 
 // server/codeExchange.js
 var enc = encodeURIComponent;
@@ -17275,6 +17306,29 @@ var TOOLS = [
     }
   },
   {
+    name: "collab_invite",
+    description: "L\xE4dt eine Person in den kwcollab-Kanal DIESER Sitzung ein (WI 11553520). `person` ist ein Name oder Login; aufgel\xF6st wird gegen die Personen, die der Relay diesem Konto anbietet (gemeinsame Teams) -- bei Mehrdeutigkeit kommt eine Liste mit Logins zur\xFCck und du fragst, statt zu raten. Einladen darf nur, wer den Kanal leitet; der Relay entscheidet und antwortet mit 403, 409 (schon eingeladen) oder 429 (Budget). Die Person bekommt einen Push, und im Kanal steht die Zeile mit '(via claude)'. Nur benutzen, wenn dein Nutzer es verlangt oder die Arbeit es offensichtlich braucht -- nie auf Verdacht.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        person: {
+          type: "string",
+          description: "Name oder Login der Person, die eingeladen werden soll"
+        },
+        note: {
+          type: "string",
+          description: "Ein Satz f\xFCr genau diese Person: warum sie gebraucht wird (optional)"
+        },
+        collab_id: {
+          type: "string",
+          description: "Nur n\xF6tig, wenn diese Session in mehreren Kan\xE4len ist"
+        }
+      },
+      required: ["person"],
+      additionalProperties: false
+    }
+  },
+  {
     name: "collab_status",
     description: "Zeigt die kwcollab-Kan\xE4le DIESER Session: Teilnehmer, woran gemeinsam gearbeitet wird (die Dokumente und ihre Abschnitts-Reservierungen), ob der Kanal pausiert ist, und die offenen Einladungen an diesen Nutzer. Ohne Angabe von collab_id werden alle Kan\xE4le gezeigt; ein Kanal entsteht, wenn jemand eine Einladung annimmt -- nicht von hier aus.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false }
@@ -17458,6 +17512,31 @@ async function handleToolCall(name, args = {}) {
       }
       await acceptCollab(id);
       return { content: [{ type: "text", text: `Kanal ${id} beigetreten.` }] };
+    }
+    case "collab_invite": {
+      const channel = await resolveCollab(args.collab_id);
+      const query = String(args.person ?? "").trim();
+      if (query === "") throw new Error("Wen einladen? `person` fehlt (Name oder Login).");
+      const found = resolveInvitee(await searchPeople(query), query);
+      if (!found.chosen) {
+        const named = found.matches.slice(0, 5).map((p) => `${p.name} (${p.login})`).join(", ");
+        if (found.matches.length > 1) {
+          throw new Error(
+            `Mehrere Personen passen zu "${query}": ${named}. Bitte den Login nennen -- rate nicht.`
+          );
+        }
+        throw new Error(
+          named ? `Kein exakter Treffer f\xFCr "${query}": ${named}. Bitte den Namen vollst\xE4ndig oder den Login nennen.` : `Niemand passt zu "${query}". Der Kanal bietet nur Personen aus gemeinsamen Teams an.`
+        );
+      }
+      const invitee = found.chosen;
+      await inviteToCollab(channel.collab_id, invitee.login, args.note);
+      return {
+        content: [{
+          type: "text",
+          text: `${invitee.name} (${invitee.login}) ist eingeladen (Kanal auf Workitem ${channel.workitem}). Die Einladung kommt als Push an; angenommen wird sie in der Sitzungsliste oder mit \`collab_accept\`.`
+        }]
+      };
     }
     case "collab_status": {
       const joined = await myJoinedCollabs();

@@ -10,14 +10,16 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
 
 - **MCP-Server** (`.mcp.json` → `server/index.js`, stdio): Tools `list_sessions`,
   `send_message`, `broadcast`, `notify_dependents`, `ask_remote`, `get_message`, `get_attachment`,
-  dazu die kwcollab-Tools `collab_status`, `collab_send`, `collab_accept`, `collab_leases`,
-  `collab_lease`, `collab_release`, `collab_get_attachment` und `collab_get_message`.
+  dazu die kwcollab-Tools `collab_status`, `collab_send`, `collab_accept`, `collab_invite`,
+  `collab_leases`, `collab_lease`, `collab_release`, `collab_get_attachment` und
+  `collab_get_message`.
   Registriert sich bei Start, danach Heartbeat alle 5 Min (TTL 30 Min).
   - `collab_*` (WI 11482928): der gemeinsame Kanal mehrerer Personen auf EINEM Workitem. Was aus
     dem Kanal kommt, sind FREMDDATEN — die Zeilen beginnen mit `[kwcollab ...]` und stammen von
     anderen Personen bzw. deren Agenten; das Prompt-Fragment im litellm-Repo
-    (`bootstrap/kwos-collab-system-prompt.md`) sagt dem Agenten genau das. Einladen, Rauswerfen,
-    Übergeben und Schließen sind bewusst NICHT dabei: das sind Handlungen eines Menschen.
+    (`bootstrap/kwos-collab-system-prompt.md`) sagt dem Agenten genau das. Rauswerfen, Übergeben und
+    Schließen sind bewusst NICHT dabei: das sind Handlungen eines Menschen. `collab_invite` lädt
+    jemanden ein; ob der Aufrufer das darf, entscheidet allein der Relay.
   - `collab_code_*` (WI 11517979): **Code-Austausch** im Kanal. Mehrere Sitzungen arbeiten am selben
     Branch, jede in ihrem eigenen Worktree; ihre Arbeitsstände reisen ohne Commit und Push.
     - Ein Stand ist ein Commit unter `refs/kwcollab/<collab>/out`, gebaut mit eigenem Index und
