@@ -625,3 +625,101 @@ test("handleToolCall: ein collab_*-Aufruf erreicht den Relay ohne Freigabeschalt
     mock.restore();
   }
 });
+
+// ── Einladen über das Werkzeug (WI 11553520) ────────────────────────────────────────────────
+
+test("resolveInvitee: ein Login gewinnt, ein Name muss als Wortmenge exakt passen", () => {
+  const people = [
+    { login: "u-0001", name: "Alex Beispiel" },
+    { login: "u-0002", name: "Alex Beispiel-Klein" },
+    { login: "u-0003", name: "Nora Muster" },
+    { login: "u-0004", name: "Nora Munster" },
+  ];
+  // Der Login ist die Identitaet -- exakt, Gross/Klein egal.
+  assert.equal(collab.resolveInvitee(people, "U-0001").chosen?.name, "Alex Beispiel");
+  // "Beispiel, Alex" ist dieselbe Person, "Beispiel-Klein" eine andere.
+  assert.equal(collab.resolveInvitee(people, "Beispiel, Alex").chosen?.login, "u-0001");
+  // KEIN stilles Zusammenlegen zweier verschiedener Nachnamen: der tolerante Umlaut-Fold gehoert in die Vorschlagsliste, nicht
+  // in die Entscheidung. Sonst laedt jemand die falsche Person ein.
+  assert.equal(collab.resolveInvitee(people, "Nora Muster").chosen?.login, "u-0003");
+  assert.equal(collab.resolveInvitee(people, "Nora Munster").chosen?.login, "u-0004");
+  // Mehrdeutig bleibt mehrdeutig -- mit beiden Kandidaten, nicht mit "der ersten Zeile".
+  const two = collab.resolveInvitee(
+    [...people, { login: "u-0009", name: "Alex Beispiel" }], "Alex Beispiel");
+  assert.equal(two.chosen, null);
+  assert.ok(two.matches.length >= 2);
+});
+
+test("resolveInvitee: ein Tippfehler nennt die Kandidaten und waehlt niemanden", () => {
+  const people = [{ login: "u-0001", name: "Alex Beispiel" }, { login: "u-0002", name: "Sam Vorlage" }];
+  const miss = collab.resolveInvitee(people, "Alex Beisp");
+  assert.equal(miss.chosen, null);
+  assert.equal(miss.matches[0]?.login, "u-0001");
+  const none = collab.resolveInvitee(people, "Zoe Zufall");
+  assert.equal(none.chosen, null);
+  assert.deepEqual(none.matches, []);
+});
+
+test("collab_invite laedt die aufgeloeste Person ein -- via claude, mit Notiz", async () => {
+  const { handleToolCall } = await import("../server/index.js");
+  const invited = [];
+  const mock = installFetchMock((url, init) => {
+    if (url.includes("/invites")) {
+      invited.push({ url, body: JSON.parse(String(init?.body ?? "{}")) });
+      return jsonResponse({ invited: "u-0001" }, 201);
+    }
+    if (url.includes("/v1/people")) {
+      return jsonResponse({ people: [{ login: "u-0001", name: "Alex Beispiel" }] });
+    }
+    if (url.includes("/v1/collabs")) return jsonResponse({ collabs: [collabRow()] });
+    return jsonResponse({}, 404);
+  });
+  try {
+    const out = await handleToolCall("collab_invite", { person: "Alex Beispiel", note: "kennt den Aufbau" });
+    assert.match(out.content[0].text, /Alex Beispiel/);
+    assert.match(out.content[0].text, /u-0001/);
+    assert.equal(invited.length, 1);
+    assert.match(invited[0].url, /\/v1\/collabs\/[^/]+\/invites$/);
+    assert.equal(invited[0].body.subject, "u-0001");
+    assert.equal(invited[0].body.note, "kennt den Aufbau");
+    // Die Herkunft reist mit: der Kanal schreibt "(via claude)", der Push nennt die Hand.
+    assert.equal(invited[0].body.via, "claude");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("collab_invite raet bei Mehrdeutigkeit nicht und laedt niemanden ein", async () => {
+  const { handleToolCall } = await import("../server/index.js");
+  let invites = 0;
+  const mock = installFetchMock((url) => {
+    if (url.includes("/invites")) { invites += 1; return jsonResponse({}, 201); }
+    if (url.includes("/v1/people")) {
+      return jsonResponse({ people: [
+        { login: "u-0001", name: "Alex Beispiel" },
+        { login: "u-0009", name: "Alex Beispiel" },
+      ] });
+    }
+    if (url.includes("/v1/collabs")) return jsonResponse({ collabs: [collabRow()] });
+    return jsonResponse({}, 404);
+  });
+  try {
+    await assert.rejects(
+      () => handleToolCall("collab_invite", { person: "Alex Beispiel" }),
+      /Mehrere Personen passen/,
+    );
+    assert.equal(invites, 0, "keine Einladung bei Mehrdeutigkeit");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("collab_invite ohne Kanal nennt den Grund statt ins Leere zu greifen", async () => {
+  const { handleToolCall } = await import("../server/index.js");
+  const mock = installFetchMock(() => jsonResponse({ collabs: [] }));
+  try {
+    await assert.rejects(() => handleToolCall("collab_invite", { person: "Alex Beispiel" }), /keinem Collab/);
+  } finally {
+    mock.restore();
+  }
+});

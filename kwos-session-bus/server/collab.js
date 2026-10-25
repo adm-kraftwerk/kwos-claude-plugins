@@ -308,3 +308,71 @@ export async function releaseLease(collabId, leaseId) {
 export function collabEventsUrl(collabId) {
   return `${config.relayUrl}/v1/collabs/${encodeURIComponent(collabId)}/events`;
 }
+
+// ── Inviting (2026-10-25, WI 11553520) ───────────────────────────────────────────────────────
+//
+// Until now an agent could only invite through `kwclaude invite`, which is a chain through the
+// LOCAL kwterm server: CLI → unix socket → the server process, because only that process knew the
+// session's workitem and the person catalog. A session without a running kwterm server could not
+// invite at all -- and the session itself already holds everything: the relay knows which channels
+// this login is in, and `/v1/people` answers the person search with the same token.
+//
+// NOTHING IS DECIDED HERE. The relay judges: only the maintainer invites, not yourself, not twice,
+// and its two budgets apply. This file resolves names and makes one POST.
+
+/** The person search the invite field uses: GET /v1/people?q= (relay, with this person's token). */
+export async function searchPeople(query) {
+  const q = String(query ?? "").trim();
+  // Same threshold as the relay (`okPeopleQuery`): one letter matches half the company.
+  if (q.length < 2) return [];
+  const { data } = await call(`/v1/people?q=${encodeURIComponent(q)}`);
+  return Array.isArray(data?.people) ? data.people : [];
+}
+
+/** Accent- and umlaut-insensitive folding, the same rules the relay and the picker use. */
+const foldText = (s) => String(s ?? "")
+  .normalize("NFD")
+  .replace(/[̀-ͯ]/g, "")
+  .replace(/ß/g, "ss")
+  .toLowerCase();
+
+/**
+ * Which ONE person does `query` name?
+ *
+ * A LOGIN wins outright -- it is the identity, and two people cannot share one. A NAME has to match
+ * exactly as a set of words ("Alex Beispiel" and "Beispiel, Alex" are the same person; "Alex
+ * Beispiel-Klein" is not). Anything else is a question, not a guess: `chosen` stays null and the
+ * candidates travel back so the caller can name them.
+ *
+ * Deliberately STRICTER than the relay's suggestion list, which folds ae/oe/ue so that a name typed
+ * with plain letters still finds the one spelled with umlauts. For a suggestion that is right; for
+ * picking the person who will get an invitation it is not -- two different surnames must not
+ * collapse into one.
+ */
+export function resolveInvitee(people, query) {
+  const q = String(query ?? "").trim();
+  const rows = Array.isArray(people) ? people.filter((p) => p && typeof p.login === "string" && p.login) : [];
+  if (q === "") return { chosen: null, matches: rows };
+  const loginKey = q.toLowerCase();
+  const byLogin = rows.filter((p) => p.login.toLowerCase() === loginKey);
+  if (byLogin.length === 1) return { chosen: byLogin[0], matches: byLogin };
+  const wanted = foldText(q).split(/[\s,]+/).filter(Boolean);
+  const exact = rows.filter((p) => {
+    const words = foldText(p.name ?? p.login).split(/[\s,]+/).filter(Boolean);
+    return words.length === wanted.length && wanted.every((w) => words.includes(w));
+  });
+  if (exact.length === 1) return { chosen: exact[0], matches: exact };
+  // No exact hit: hand back what the search DID find, so the caller can offer the logins.
+  const loose = rows.filter((p) => wanted.every((w) => foldText(`${p.name ?? ""} ${p.login}`).includes(w)));
+  return { chosen: null, matches: exact.length > 1 ? exact : loose };
+}
+
+/** POST /v1/collabs/{id}/invites -- the relay decides whether this person may invite at all. */
+export async function inviteToCollab(collabId, subject, note) {
+  const text = typeof note === "string" ? note.trim() : "";
+  const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/invites`, {
+    method: "POST",
+    body: { subject, ...(text ? { note: text.slice(0, 2000) } : {}), via: "claude" },
+  });
+  return data ?? {};
+}

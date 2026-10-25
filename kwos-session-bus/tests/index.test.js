@@ -185,7 +185,7 @@ test("handleToolCall('get_message') meldet eine unvollstaendige Teilfolge statt 
 
 // ── kwcollab-Werkzeuge (WI 11482928) ─────────────────────────────────────────────────────────
 
-test("TOOLS enthaelt die kwcollab-Werkzeuge -- und KEIN Einladen/Rauswerfen/Schliessen", () => {
+test("TOOLS enthaelt die kwcollab-Werkzeuge -- Einladen ja, Rauswerfen/Schliessen nein", () => {
   const names = TOOLS.map((t) => t.name);
   for (const t of [
     "collab_status", "collab_send", "collab_accept", "collab_leases", "collab_lease",
@@ -193,9 +193,14 @@ test("TOOLS enthaelt die kwcollab-Werkzeuge -- und KEIN Einladen/Rauswerfen/Schl
   ]) {
     assert.ok(names.includes(t), `${t} fehlt in TOOLS`);
   }
-  // Einladen, Rauswerfen und Schliessen sind Handlungen eines MENSCHEN; als Werkzeug fuer den
-  // Agenten gibt es sie bewusst nicht (s. die Beschreibungen in index.js).
-  for (const verboten of ["collab_invite", "collab_kick", "collab_close", "collab_handover"]) {
+  // EINLADEN IST SEIT 2026-10-25 (WI 11553520) AUCH EIN WERKZEUG DES AGENTEN. Die frueher hier
+  // stehende Regel ("Einladen ist eine Handlung eines Menschen") hat den Agenten nicht daran
+  // gehindert -- er hat es ueber `kwclaude invite` getan, nur durch eine Kette durch den lokalen
+  // kwterm-Server. Ein Werkzeug ist der ehrliche Weg: es steht in der Werkzeugliste, der Relay
+  // urteilt (nur der Maintainer), und der Kanal nennt die Herkunft ("(via claude)"). Rauswerfen,
+  // Uebergeben und Schliessen bleiben beim Menschen -- die sind hier weiterhin verboten.
+  assert.ok(names.includes("collab_invite"), "collab_invite fehlt in TOOLS");
+  for (const verboten of ["collab_kick", "collab_close", "collab_handover"]) {
     assert.ok(!names.includes(verboten), `${verboten} darf es nicht geben`);
   }
 });

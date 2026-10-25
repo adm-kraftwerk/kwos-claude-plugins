@@ -149,8 +149,37 @@ export const TOOLS = [
     },
   },
   {
-    name: "collab_status",
+    name: "collab_invite",
     description:
+      "Lädt eine Person in den kwcollab-Kanal DIESER Sitzung ein (WI 11553520). `person` ist ein " +
+      "Name oder Login; aufgelöst wird gegen die Personen, die der Relay diesem Konto anbietet " +
+      "(gemeinsame Teams) -- bei Mehrdeutigkeit kommt eine Liste mit Logins zurück und du fragst, " +
+      "statt zu raten. Einladen darf nur, wer den Kanal leitet; der Relay entscheidet und antwortet " +
+      "mit 403, 409 (schon eingeladen) oder 429 (Budget). Die Person bekommt einen Push, und im " +
+      "Kanal steht die Zeile mit '(via claude)'. Nur benutzen, wenn dein Nutzer es verlangt oder " +
+      "die Arbeit es offensichtlich braucht -- nie auf Verdacht.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        person: {
+          type: "string",
+          description: "Name oder Login der Person, die eingeladen werden soll",
+        },
+        note: {
+          type: "string",
+          description: "Ein Satz für genau diese Person: warum sie gebraucht wird (optional)",
+        },
+        collab_id: {
+          type: "string",
+          description: "Nur nötig, wenn diese Session in mehreren Kanälen ist",
+        },
+      },
+      required: ["person"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "collab_status",    description:
       "Zeigt die kwcollab-Kanäle DIESER Session: Teilnehmer, woran gemeinsam gearbeitet wird " +
       "(die Dokumente und ihre Abschnitts-Reservierungen), ob der Kanal pausiert ist, und die " +
       "offenen Einladungen an diesen Nutzer. Ohne Angabe von collab_id werden alle Kanäle " +
@@ -441,6 +470,38 @@ export async function handleToolCall(name, args = {}) {
       }
       await collab.acceptCollab(id);
       return { content: [{ type: "text", text: `Kanal ${id} beigetreten.` }] };
+    }
+    case "collab_invite": {
+      // THE CHANNEL, then the PERSON, then one POST -- and the relay decides. The session's own
+      // channels come from the relay (`resolveCollab` names them when there are several), and the
+      // person from the relay's own search: same token, same teams, no second directory.
+      const channel = await collab.resolveCollab(args.collab_id);
+      const query = String(args.person ?? "").trim();
+      if (query === "") throw new Error("Wen einladen? `person` fehlt (Name oder Login).");
+      const found = collab.resolveInvitee(await collab.searchPeople(query), query);
+      if (!found.chosen) {
+        const named = found.matches.slice(0, 5).map((p) => `${p.name} (${p.login})`).join(", ");
+        if (found.matches.length > 1) {
+          throw new Error(
+            `Mehrere Personen passen zu "${query}": ${named}. Bitte den Login nennen -- rate nicht.`
+          );
+        }
+        throw new Error(
+          named
+            ? `Kein exakter Treffer für "${query}": ${named}. Bitte den Namen vollständig oder den Login nennen.`
+            : `Niemand passt zu "${query}". Der Kanal bietet nur Personen aus gemeinsamen Teams an.`
+        );
+      }
+      const invitee = found.chosen;
+      await collab.inviteToCollab(channel.collab_id, invitee.login, args.note);
+      return {
+        content: [{
+          type: "text",
+          text: `${invitee.name} (${invitee.login}) ist eingeladen (Kanal auf Workitem ` +
+            `${channel.workitem}). Die Einladung kommt als Push an; angenommen wird sie in der ` +
+            `Sitzungsliste oder mit \`collab_accept\`.`,
+        }],
+      };
     }
     case "collab_status": {
       const joined = await collab.myJoinedCollabs();
