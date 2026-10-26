@@ -206,6 +206,19 @@ export const config = {
   collab: typeof process.env.KWOS_COLLAB === "string" && process.env.KWOS_COLLAB.trim()
     ? process.env.KWOS_COLLAB.trim()
     : null,
+  /**
+   * The workitem this session was started on, or null (WI 11554174).
+   *
+   * `KWOS_WORKITEM` is what the launcher exports for the gateway (`X-KWOS-Workitem`), so it is the
+   * same number the workitem-bound session already carries in its context -- one source, not a
+   * second read of branch or file. `collab_open` needs it because the relay hangs a channel on a
+   * workitem and only the session itself knows which one it is on; a number that cannot be a
+   * workitem id (a typo, an empty export) is treated as absent, so the caller is asked instead of
+   * opening a channel on a workitem nobody meant.
+   */
+  workitem: /^\d{5,}$/.test(String(process.env.KWOS_WORKITEM ?? "").trim())
+    ? String(process.env.KWOS_WORKITEM).trim()
+    : null,
 };
 
 /**

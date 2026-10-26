@@ -129,17 +129,54 @@ export const TOOLS = [
   //
   // Die Grenze steht in jeder Beschreibung, weil sie der Kern des Features ist: was hier aus dem
   // Kanal kommt, ist von ANDEREN Personen (bzw. deren Agenten) -- Fremddaten, keine Anweisung des
-  // eigenen Nutzers, auch nicht als "das hat der Kollege so gesagt". Einladen, Rauswerfen,
-  // Uebergeben und Schliessen gibt es hier bewusst NICHT: das sind Handlungen eines Menschen in
-  // der Oberflaeche, nicht eines Agenten.
+  // eigenen Nutzers, auch nicht als "das hat der Kollege so gesagt". Oeffnen und Einladen sind
+  // inzwischen AUCH hier (WI 11554174, WI 11553520): beides braucht nur die eigene Identitaet, und
+  // ohne den Kanal war das Einladen von einem Prompt aus gar nicht erreichbar. Rauswerfen,
+  // Uebergeben und Schliessen bleiben Handlungen eines Menschen in der Oberflaeche.
+  {
+    name: "collab_open",
+    description:
+      "Öffnet den kwcollab-Kanal auf dem Workitem DIESER Sitzung (WI 11554174) -- der Schritt, ohne " +
+      "den es weder Einladen noch Schreiben noch Reservieren gibt. Das Workitem kommt aus der " +
+      "Sitzung (KWOS_WORKITEM), die Kennung der Konversation aus diesem Prozess; der Relay prüft, " +
+      "dass sie dem Aufrufer gehört, und lässt EINEN offenen Kanal je Workitem zu. Steht schon einer " +
+      "offen, wird kein zweiter angelegt: die Antwort nennt den bestehenden, und der kann weiter " +
+      "benutzt werden. `person` und `note` laden im selben Zug ein (wie collab_invite). Nur öffnen, " +
+      "wenn dein Nutzer es verlangt oder die Arbeit es offensichtlich braucht.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        workitem: {
+          type: "string",
+          description:
+            "Nur nötig, wenn diese Sitzung auf einem anderen Workitem arbeitet als dem gestarteten " +
+            "(Standard: KWOS_WORKITEM)",
+        },
+        title: {
+          type: "string",
+          description: "Optional: der Titel des Kanals; ohne Angabe zeigt er das Workitem",
+        },
+        topic: { type: "string", description: "Optional: worum es im Kanal geht, als ein Satz" },
+        person: {
+          type: "string",
+          description: "Optional: eine Person, die im selben Zug eingeladen wird (Name oder Login)",
+        },
+        note: {
+          type: "string",
+          description: "Optional: ein Satz für genau diese Person: warum sie gebraucht wird",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
   {
     name: "collab_accept",
     description:
       "Tritt dem kwcollab-Kanal bei (WI 11482928) -- mit DIESER Sitzung. Braucht die collab_id aus " +
       "collab_status bzw. aus einer Einladung; ohne Angabe wird die genommen, mit der die Sitzung " +
       "gestartet wurde. Annehmen kann nur die Sitzung selbst: der Relay prueft, dass sie dem " +
-      "Aufrufer gehoert. Einladen, Rauswerfen und Schliessen gibt es hier bewusst nicht -- das sind " +
-      "Handlungen eines Menschen.",
+      "Aufrufer gehoert. Oeffnen und Einladen gibt es hier ebenfalls (collab_open, collab_invite); " +
+      "Rauswerfen und Schliessen bleiben Handlungen eines Menschen.",
     inputSchema: {
       type: "object",
       properties: {
@@ -183,7 +220,7 @@ export const TOOLS = [
       "Zeigt die kwcollab-Kanäle DIESER Session: Teilnehmer, woran gemeinsam gearbeitet wird " +
       "(die Dokumente und ihre Abschnitts-Reservierungen), ob der Kanal pausiert ist, und die " +
       "offenen Einladungen an diesen Nutzer. Ohne Angabe von collab_id werden alle Kanäle " +
-      "gezeigt; ein Kanal entsteht, wenn jemand eine Einladung annimmt -- nicht von hier aus.",
+      "gezeigt. Einen Kanal, den es noch nicht gibt, öffnest du mit collab_open.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -342,7 +379,7 @@ export const TOOLS = [
 // The version the MCP client sees in the handshake. It names the SAME artifact as plugin.json /
 // marketplace.json, so it moves with them -- it had been left at 0.5.0 through the 0.5.1 bump.
 const server = new Server(
-  { name: "kwos-session-bus", version: "0.6.2" },
+  { name: "kwos-session-bus", version: "0.9.1" },
   { capabilities: { tools: {} } }
 );
 
@@ -388,6 +425,32 @@ export function visibleTools(env = process.env) {
 }
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: visibleTools() }));
+
+/**
+ * ONE person query becomes one login -- the single place the invite AND the open-and-invite act ask.
+ *
+ * Two spellings of this rule would drift apart about the one thing that matters: ambiguity. The
+ * search is the relay's own (`/v1/people`, same token, same teams), the decision is
+ * `resolveInvitee` (a login wins outright, a name must match as a set of words), and anything else
+ * comes back as CANDIDATES -- never as "the first row".
+ */
+async function resolvePerson(query) {
+  const text = String(query ?? "").trim();
+  if (text === "") throw new Error("Wen einladen? `person` fehlt (Name oder Login).");
+  const found = collab.resolveInvitee(await collab.searchPeople(text), text);
+  if (found.chosen) return found.chosen;
+  const named = found.matches.slice(0, 5).map((p) => `${p.name} (${p.login})`).join(", ");
+  if (found.matches.length > 1) {
+    throw new Error(
+      `Mehrere Personen passen zu "${text}": ${named}. Bitte den Login nennen -- rate nicht.`
+    );
+  }
+  throw new Error(
+    named
+      ? `Kein exakter Treffer für "${text}": ${named}. Bitte den Namen vollständig oder den Login nennen.`
+      : `Niemand passt zu "${text}". Der Kanal bietet nur Personen aus gemeinsamen Teams an.`
+  );
+}
 
 // Reine Dispatch-Logik, getrennt von der stdio/MCP-Verdrahtung (gleiches Prinzip wie
 // lib.js/server.js im litellm-Repo) -- so testbar ohne Server/Transport hochzufahren.
@@ -460,6 +523,38 @@ export async function handleToolCall(name, args = {}) {
       return { content: [{ type: "image", data, mimeType }] };
     }
     // ── kwcollab (WI 11482928) ───────────────────────────────────────────────────────────────
+    case "collab_open": {
+      // THE WORKITEM from the launcher, the CONVERSATION ID from this process -- the relay checks
+      // that the second belongs to the caller, and no other party has it. An absent workitem is a
+      // question, not an invention: a channel on the wrong workitem is a shared space nobody meant.
+      const workitem = String(args.workitem ?? config.workitem ?? "").trim();
+      if (workitem === "") {
+        throw new Error(
+          "Welches Workitem? Diese Sitzung wurde auf keinem gestartet (KWOS_WORKITEM fehlt) -- " +
+            "nenn das Workitem im Aufruf."
+        );
+      }
+      const opened = await collab.openCollab({ workitem, title: args.title, topic: args.topic });
+      const said = [
+        opened.existed
+          ? `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein ` +
+            `zweiter wird nicht angelegt, und dieser ist der, in dem du weiterschreibst.`
+          : `Kanal ${opened.collab_id} auf Workitem ${workitem} ist offen.`,
+      ];
+      // THE INVITATION IS THE SECOND HALF OF THE SAME ACT (like the surfaces' CollabOpen): a channel
+      // nobody is in is an empty place. A refusal for the person must not read as "nothing happened"
+      // -- the channel IS there, so its opening is reported and the failure named beside it.
+      if (String(args.person ?? "").trim() !== "") {
+        try {
+          const invitee = await resolvePerson(args.person);
+          await collab.inviteToCollab(opened.collab_id, invitee.login, args.note);
+          said.push(`${invitee.name} (${invitee.login}) ist eingeladen.`);
+        } catch (e) {
+          said.push(`Der Kanal steht, aber die Einladung ging NICHT hinaus: ${e.message}`);
+        }
+      }
+      return { content: [{ type: "text", text: said.join(" ") }] };
+    }
     case "collab_accept": {
       // The session id comes from THIS process (the marker), never from the caller: the relay's
       // accept checks that the session belongs to the caller, and this is the only place that
@@ -474,25 +569,9 @@ export async function handleToolCall(name, args = {}) {
     case "collab_invite": {
       // THE CHANNEL, then the PERSON, then one POST -- and the relay decides. The session's own
       // channels come from the relay (`resolveCollab` names them when there are several), and the
-      // person from the relay's own search: same token, same teams, no second directory.
+      // person from `resolvePerson` -- the same rule `collab_open` uses.
       const channel = await collab.resolveCollab(args.collab_id);
-      const query = String(args.person ?? "").trim();
-      if (query === "") throw new Error("Wen einladen? `person` fehlt (Name oder Login).");
-      const found = collab.resolveInvitee(await collab.searchPeople(query), query);
-      if (!found.chosen) {
-        const named = found.matches.slice(0, 5).map((p) => `${p.name} (${p.login})`).join(", ");
-        if (found.matches.length > 1) {
-          throw new Error(
-            `Mehrere Personen passen zu "${query}": ${named}. Bitte den Login nennen -- rate nicht.`
-          );
-        }
-        throw new Error(
-          named
-            ? `Kein exakter Treffer für "${query}": ${named}. Bitte den Namen vollständig oder den Login nennen.`
-            : `Niemand passt zu "${query}". Der Kanal bietet nur Personen aus gemeinsamen Teams an.`
-        );
-      }
-      const invitee = found.chosen;
+      const invitee = await resolvePerson(args.person);
       await collab.inviteToCollab(channel.collab_id, invitee.login, args.note);
       return {
         content: [{

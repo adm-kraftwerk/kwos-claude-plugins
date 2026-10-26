@@ -10,8 +10,8 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
 
 - **MCP-Server** (`.mcp.json` → `server/index.js`, stdio): Tools `list_sessions`,
   `send_message`, `broadcast`, `notify_dependents`, `ask_remote`, `get_message`, `get_attachment`,
-  dazu die kwcollab-Tools `collab_status`, `collab_send`, `collab_accept`, `collab_invite`,
-  `collab_leases`, `collab_lease`, `collab_release`, `collab_get_attachment` und
+  dazu die kwcollab-Tools `collab_status`, `collab_open`, `collab_send`, `collab_accept`,
+  `collab_invite`, `collab_leases`, `collab_lease`, `collab_release`, `collab_get_attachment` und
   `collab_get_message`.
   Registriert sich bei Start, danach Heartbeat alle 5 Min (TTL 30 Min).
   - `collab_*` (WI 11482928): der gemeinsame Kanal mehrerer Personen auf EINEM Workitem. Was aus
@@ -20,6 +20,12 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
     (`bootstrap/kwos-collab-system-prompt.md`) sagt dem Agenten genau das. Rauswerfen, Übergeben und
     Schließen sind bewusst NICHT dabei: das sind Handlungen eines Menschen. `collab_invite` lädt
     jemanden ein; ob der Aufrufer das darf, entscheidet allein der Relay.
+  - `collab_open(workitem?, title?, topic?, person?, note?)` (WI 11554174): öffnet den Kanal auf dem
+    Workitem der Sitzung (`KWOS_WORKITEM`, sonst im Aufruf genannt) mit der EIGENEN Konversation,
+    die der Relay als Eigentum prüft. Ein offener Kanal je Workitem bleibt die Regel des Relays: ein
+    409 ist keine Fehlermeldung, sondern die Kennung des Kanals, der schon steht. `person` + `note`
+    laden im selben Zug ein. Bis dahin konnte nur eine Oberfläche einen Kanal öffnen (TUI `^b z`,
+    Web/PWA „Kanal“), und ohne Kanal war vom Prompt aus weder Einladen noch Schreiben erreichbar.
   - `collab_code_*` (WI 11517979): **Code-Austausch** im Kanal. Mehrere Sitzungen arbeiten am selben
     Branch, jede in ihrem eigenen Worktree; ihre Arbeitsstände reisen ohne Commit und Push.
     - Ein Stand ist ein Commit unter `refs/kwcollab/<collab>/out`, gebaut mit eigenem Index und
