@@ -849,6 +849,42 @@ test("collab_open: oeffnen und einladen sind EIN Zug -- und das Workitem kommt a
   }
 });
 
+test("collab_open nimmt nur eine Workitem-NUMMER an -- kein geratener Name", async () => {
+  // Review of WI 11554174: `args.workitem` ging durch, wie es getippt war, und der Relay prueft nur
+  // die Zeichenklasse. Eine falsch gelesene Nummer legte dann einen echten Kanal auf einem Workitem
+  // an, das niemand gemeint hat.
+  const { handleToolCall } = await import("../server/index.js");
+  const mock = installFetchMock(() => jsonResponse({}, 500));
+  try {
+    await assert.rejects(
+      () => handleToolCall("collab_open", { workitem: "11554x74" }),
+      /keine Workitem-Nummer/,
+    );
+    assert.equal(mock.calls.length, 0, "kein Aufruf mit einem Workitem, das keine Nummer ist");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("openCollab verweigert eine lokal ERFUNDENE Sitzungskennung", async () => {
+  // Review of WI 11554174: ohne Marker, ohne CLAUDE_CODE_SESSION_ID erfindet config.js eine uuid,
+  // und der Relay nimmt sie als Adresse -- der Kanal gehoerte einer Sitzung, die es nie gibt, und
+  // dieser Prozess waere nach der ersten echten Kennung nicht mehr drin.
+  const before = config.sessionIdGenerated;
+  config.sessionIdGenerated = true;
+  const mock = installFetchMock(() => jsonResponse({}, 500));
+  try {
+    await assert.rejects(
+      () => collab.openCollab({ workitem: "11554174" }),
+      /keine echte Claude-Code-Kennung/,
+    );
+    assert.equal(mock.calls.length, 0, "ohne echte Kennung geht keine Anfrage hinaus");
+  } finally {
+    config.sessionIdGenerated = before;
+    mock.restore();
+  }
+});
+
 test("collab_open: ohne Workitem wird GEFRAGT statt geraten", async () => {
   const { handleToolCall } = await import("../server/index.js");
   const before = config.workitem;
