@@ -7,7 +7,7 @@
 // That question is answered from the relay, never locally: joining is a fact on the server (the
 // member row carries the session id), and a local guess would let a session talk into a channel it
 // was removed from.
-import { config, sessionCwd } from "./config.js";
+import { config, sessionCwd, refreshSessionId } from "./config.js";
 import { getAccessToken } from "./auth.js";
 import { rememberOwnHumanLine } from "./ownHumanLines.js";
 import { call } from "./relay-client.js";
@@ -112,6 +112,19 @@ export const TOPIC_MAX = 300;
 export async function openCollab({ workitem, title = "", topic = "", cwd = sessionCwd } = {}) {
   const id = String(workitem ?? "").trim();
   if (id === "") throw new Error("Ohne Workitem kein Kanal -- welches Workitem?");
+  // THE NEWEST ID FIRST: the marker is the truth across /clear, and the monitor's 5 s check can be
+  // 5 s behind a /clear that just happened -- a channel filed on the previous conversation is one
+  // this session is no longer in (review of WI 11554174).
+  await refreshSessionId();
+  // AND IT HAS TO BE A REAL ONE (`config.sessionIdGenerated`): an invented uuid files the channel on a
+  // session that no Claude Code process will ever have. Refused where the reason is still known.
+  if (config.sessionIdGenerated) {
+    throw new Error(
+      "Diese Sitzung hat keine echte Claude-Code-Kennung (sie wurde lokal erzeugt) -- ein Kanal " +
+        "unter ihr gehoerte keiner Sitzung, und diese waere nach der ersten echten Kennung nicht " +
+        "mehr drin. Erst oeffnen, wenn Claude Code eine Kennung liefert."
+    );
+  }
   const where = await sessionRepo(cwd);
   const head = String(title ?? "").trim();
   const subject = String(topic ?? "").trim();
