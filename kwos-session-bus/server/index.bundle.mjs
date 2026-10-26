@@ -15589,6 +15589,7 @@ async function resolveSessionId() {
     }
   }
   const generated = randomUUID();
+  config2.sessionIdGenerated = true;
   log.error(
     `Keine echte session_id gefunden (weder ${join(MARKER_DIR, OWN_MARKER_NAME || "<client-id>")}, CLAUDE_CODE_SESSION_ID noch ${LEGACY_MARKER_FILE}) \u2014 verwende lokal generierte Session-ID (${generated}). Relay-Attribution passt dadurch nicht zusammen.`
   );
@@ -15599,6 +15600,13 @@ var config2 = {
   tokenHelperPath: TOKEN_HELPER_PATH,
   tokenOverride: TOKEN_OVERRIDE,
   sessionId: void 0,
+  /**
+   * TRUE when `sessionId` was INVENTED by this process (no marker, no environment value -- see
+   * `resolveSessionId`). `collab_open` refuses then: a channel opened under such an id is held by a
+   * session that never existed, and this process stops being a member as soon as Claude Code names
+   * a real one. A later marker clears it (`refreshSessionId`).
+   */
+  sessionIdGenerated: false,
   displayName: process.env.KWOS_SESSION_DISPLAY_NAME || readClaudeSessionName() || deriveDisplayName(sessionCwd),
   channels: deriveChannels(sessionCwd),
   heartbeatIntervalMs: 5 * 60 * 1e3,
@@ -15644,6 +15652,7 @@ async function refreshSessionId() {
   if (!own || own.id === config2.sessionId) return false;
   const previous = config2.sessionId;
   config2.sessionId = own.id;
+  config2.sessionIdGenerated = false;
   log.info("Session-ID gewechselt (/clear oder --resume) \u2014 binde neu.", { previous, sessionId: own.id });
   return true;
 }
@@ -16302,6 +16311,12 @@ var TOPIC_MAX = 300;
 async function openCollab({ workitem, title = "", topic = "", cwd: cwd2 = sessionCwd } = {}) {
   const id = String(workitem ?? "").trim();
   if (id === "") throw new Error("Ohne Workitem kein Kanal -- welches Workitem?");
+  await refreshSessionId();
+  if (config2.sessionIdGenerated) {
+    throw new Error(
+      "Diese Sitzung hat keine echte Claude-Code-Kennung (sie wurde lokal erzeugt) -- ein Kanal unter ihr gehoerte keiner Sitzung, und diese waere nach der ersten echten Kennung nicht mehr drin. Erst oeffnen, wenn Claude Code eine Kennung liefert."
+    );
+  }
   const where = await sessionRepo(cwd2);
   const head = String(title ?? "").trim();
   const subject = String(topic ?? "").trim();
@@ -17525,7 +17540,7 @@ var TOOLS = [
   ...CODE_TOOLS
 ];
 var server = new Server(
-  { name: "kwos-session-bus", version: "0.9.1" },
+  { name: "kwos-session-bus", version: "0.9.2" },
   { capabilities: { tools: {} } }
 );
 var REMOTE_ONLY_TOOLS = /* @__PURE__ */ new Set(["ask_remote"]);
@@ -17609,6 +17624,11 @@ async function handleToolCall(name, args = {}) {
       if (workitem === "") {
         throw new Error(
           "Welches Workitem? Diese Sitzung wurde auf keinem gestartet (KWOS_WORKITEM fehlt) -- nenn das Workitem im Aufruf."
+        );
+      }
+      if (!/^\d{5,}$/.test(workitem)) {
+        throw new Error(
+          `"${workitem}" ist keine Workitem-Nummer -- ein Kanal haengt an einem Workitem (mindestens fuenf Ziffern).`
         );
       }
       const opened = await openCollab({ workitem, title: args.title, topic: args.topic });

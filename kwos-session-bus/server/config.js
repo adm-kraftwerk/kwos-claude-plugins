@@ -172,6 +172,11 @@ async function resolveSessionId() {
   }
 
   const generated = randomUUID();
+  // A LOCALLY INVENTED ID IS NOT AN ADDRESS (WI 11554174, review): the relay files a channel on
+  // whatever id opens it, and nothing will ever have this one again -- the channel would belong to
+  // a session that does not exist, and after a real id appears this process is no longer "in" it.
+  // Remembered so `collab_open` can refuse instead of creating that ghost.
+  config.sessionIdGenerated = true;
   log.error(
     `Keine echte session_id gefunden (weder ${join(MARKER_DIR, OWN_MARKER_NAME || "<client-id>")}, ` +
       `CLAUDE_CODE_SESSION_ID noch ${LEGACY_MARKER_FILE}) — verwende lokal generierte Session-ID ` +
@@ -185,6 +190,13 @@ export const config = {
   tokenHelperPath: TOKEN_HELPER_PATH,
   tokenOverride: TOKEN_OVERRIDE,
   sessionId: undefined,
+  /**
+   * TRUE when `sessionId` was INVENTED by this process (no marker, no environment value -- see
+   * `resolveSessionId`). `collab_open` refuses then: a channel opened under such an id is held by a
+   * session that never existed, and this process stops being a member as soon as Claude Code names
+   * a real one. A later marker clears it (`refreshSessionId`).
+   */
+  sessionIdGenerated: false,
   displayName: process.env.KWOS_SESSION_DISPLAY_NAME || readClaudeSessionName() || deriveDisplayName(sessionCwd),
   channels: deriveChannels(sessionCwd),
   heartbeatIntervalMs: 5 * 60 * 1000, // Vorschlag Server-Spec §3.1: alle 5 Min
@@ -264,6 +276,9 @@ export async function refreshSessionId() {
   if (!own || own.id === config.sessionId) return false;
   const previous = config.sessionId;
   config.sessionId = own.id;
+  // A real marker id supersedes the invented one -- from here on this process has an address that
+  // a channel may hang on (`config.sessionIdGenerated`).
+  config.sessionIdGenerated = false;
   log.info("Session-ID gewechselt (/clear oder --resume) — binde neu.", { previous, sessionId: own.id });
   return true;
 }

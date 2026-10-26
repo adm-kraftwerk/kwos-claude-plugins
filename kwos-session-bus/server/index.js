@@ -380,7 +380,7 @@ export const TOOLS = [
 // The version the MCP client sees in the handshake. It names the SAME artifact as plugin.json /
 // marketplace.json, so it moves with them -- it had been left at 0.5.0 through the 0.5.1 bump.
 const server = new Server(
-  { name: "kwos-session-bus", version: "0.9.1" },
+  { name: "kwos-session-bus", version: "0.9.2" },
   { capabilities: { tools: {} } }
 );
 
@@ -533,6 +533,16 @@ export async function handleToolCall(name, args = {}) {
         throw new Error(
           "Welches Workitem? Diese Sitzung wurde auf keinem gestartet (KWOS_WORKITEM fehlt) -- " +
             "nenn das Workitem im Aufruf."
+        );
+      }
+      // THE SAME SHAPE THE LAUNCHER ACCEPTS (review of WI 11554174): a number, at least five digits.
+      // `config.workitem` is checked at load; a workitem NAMED IN THE CALL went through as typed, and
+      // the relay only checks the character class -- so a misread number opened a real channel on a
+      // workitem nobody meant.
+      if (!/^\d{5,}$/.test(workitem)) {
+        throw new Error(
+          `"${workitem}" ist keine Workitem-Nummer -- ein Kanal haengt an einem Workitem (mindestens ` +
+            `fuenf Ziffern).`
         );
       }
       const opened = await collab.openCollab({ workitem, title: args.title, topic: args.topic });
