@@ -168,9 +168,11 @@ export function frameToLine(raw, { members = [], selfSessionId = null, selfSubje
   let msg;
   try { msg = JSON.parse(raw); } catch { return null; }
   if (!msg || typeof msg !== "object") return null;
-  // The channel's own lifecycle event (relay: `event: closed`, data { collab_id }). Not a stored
-  // message: no seq in its head, and one line (nothing to fetch).
-  if (!msg.seq) return msg.collab_id ? [collabClosedLine(msg.collab_id)] : null;
+  // The channel's own lifecycle event (relay: `event: closed`, data { collab_id, reason? }). Not a
+  // stored message: no seq in its head, and one line (nothing to fetch). The REASON rides along --
+  // without it every stream end reads as "channel closed, protocol deleted", which is false for
+  // both non-close reasons (measured 2026-10-26).
+  if (!msg.seq) return msg.collab_id ? [collabClosedLine(msg.collab_id, msg.reason ?? null)] : null;
   // Already printed: a frame that arrives twice must not become two lines in the session.
   if (Number(msg.seq) <= Number(after)) return null;
   // The session id alone is NOT enough (s. the file header): the relay stamps a HUMAN message from

@@ -213,7 +213,27 @@ test("collabClosedLine: sagt, dass der Kanal weg ist -- und traegt KEINE seq", (
   const line = collabClosedLine(COLLAB);
   assert.match(line, /^\[kwcollab 7f3a1b2c \| system\]/);
   assert.match(line, /beendet/i);
+  assert.match(line, /geloescht/i);
   assert.ok(!/:\d+ \|/.test(line), "die Systemzeile ist keine Nachricht und hat keine seq");
+});
+
+test("collabClosedLine: der Grund entscheidet, was die Zeile behauptet (2026-10-26)", () => {
+  // Der Relay benutzt DASSELBE Event fuer drei verschiedene Dinge, und nur eines davon loescht
+  // etwas. Vorher stand "Protokoll auf dem Server geloescht" auch dann da, als ein abgelaufener
+  // Bearer den Stream beendet hatte -- der Kanal stand offen, alle Zeilen intakt.
+  const access = collabClosedLine(COLLAB, "access");
+  assert.match(access, /^\[kwcollab 7f3a1b2c \| system\]/);
+  assert.match(access, /Zugriff/i);
+  assert.ok(!/geloescht/i.test(access), "access loescht nichts -- der Kanal besteht weiter");
+
+  const failed = collabClosedLine(COLLAB, "check-failed");
+  assert.match(failed, /Pruefung/i);
+  assert.ok(!/geloescht/i.test(failed), "eine fehlgeschlagene Pruefung loescht nichts");
+
+  // Ein unbekannter Grund faellt auf den echten Schluss zurueck: der Relay schickt beim Schliessen
+  // GAR KEINEN Grund, also ist "kein/ fremder Grund" die Aussage, die am wenigsten behauptet.
+  assert.match(collabClosedLine(COLLAB, null), /geloescht/i);
+  assert.match(collabClosedLine(COLLAB, "irgendwas-neues"), /geloescht/i);
 });
 
 test("collabShortId: die erste UUID-Gruppe reicht, um zwei Kanaele zu unterscheiden", () => {
