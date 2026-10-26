@@ -37,7 +37,7 @@
 import { fstatSync } from "node:fs";
 import { config, ensureSessionId, refreshSessionId, readCheckInterval, sessionCwd } from "./config.js";
 import { isMainModule } from "./is-main.js";
-import { log } from "./log.js";
+import { createStateReporter, log } from "./log.js";
 import { runSseReceiver } from "./sse-receiver.js";
 import { readCursor, rememberCursor } from "./collabCursor.js";
 import { createLineWriter } from "./listen.js";
@@ -313,6 +313,11 @@ export async function startCollabListener({ writeLine, stdin = process.stdin, is
     return inflight;
   }
 
+  // One outage, one line (WI 11553492). The poll runs every 15 s for the life of the session, so a
+  // gateway that is away for a minute used to write four identical "not reachable" lines -- the
+  // fourth says nothing the first did not. The list coming back is the line worth having.
+  const listState = createStateReporter();
+
   async function pollOnce() {
     let joined = [];
     try {
@@ -320,9 +325,10 @@ export async function startCollabListener({ writeLine, stdin = process.stdin, is
     } catch (err) {
       // Not fatal and not silent: no channel stream is opened this round, the next poll tries
       // again. A session without a relay connection simply has no collab.
-      log.error("Collab-Liste nicht abrufbar.", { error: String(err) });
+      listState.failed("list", "Collab-Liste nicht abrufbar.", { error: String(err) });
       return;
     }
+    listState.recovered("list", "Collab-Liste wieder erreichbar.");
     const wanted = new Set(joined.map((c) => c.collab_id));
     lastJoined = wanted;
     for (const [id, entry] of [...open]) {
