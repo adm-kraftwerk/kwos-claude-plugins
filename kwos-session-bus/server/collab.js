@@ -87,6 +87,77 @@ export async function leaveCollab(collabId, summary) {
   return data ?? {};
 }
 
+/** The relay's ceiling for a topic's ref (relay/lib.js::COLLAB_TOPIC_REF_MAX). One number for both. */
+export const TOPIC_MAX = 300;
+
+/**
+ * POST /v1/collabs -- open a channel on a workitem with THIS session (WI 11554174).
+ *
+ * THE SESSION OPENS IT ITSELF, and that is the reason this belongs here: the relay wants a Claude
+ * Code session id that the caller OWNS (`ownedSession`), and the only party that knows its own id is
+ * this process (`config.sessionId`, read from the marker, so a /clear is already followed). Until
+ * now no party could open a channel from a prompt -- the route existed and the surfaces sent it, so
+ * an agent had to ask a human to press `^b z` before it could invite, write or reserve anything.
+ *
+ * AN OPEN CHANNEL IS NOT A FAILURE, and it is not automatically THIS session's either: the relay
+ * allows one per workitem and answers 409 with the id of the one that stands. So the 409 branch
+ * tries the join (`acceptCollab`) -- the same act a human's surface performs on an existing channel.
+ * It succeeds when this session was invited or is already in; when it does not, the reason comes
+ * back as `joined: false` + `joinError` instead of being collected as a 403 "not a member" on the
+ * caller's first write.
+ *
+ * `repo_hint`/`branch_hint` are what the session works in, exactly like the join (`acceptCollab`) --
+ * the relay shows them in the channel's head, and a directory without git simply leaves them out.
+ */
+export async function openCollab({ workitem, title = "", topic = "", cwd = sessionCwd } = {}) {
+  const id = String(workitem ?? "").trim();
+  if (id === "") throw new Error("Ohne Workitem kein Kanal -- welches Workitem?");
+  const where = await sessionRepo(cwd);
+  const head = String(title ?? "").trim();
+  const subject = String(topic ?? "").trim();
+  const body = {
+    workitem: id,
+    session_id: config.sessionId,
+    ...(head ? { title: head.slice(0, 300) } : {}),
+    ...(where?.repo ? { repo_hint: where.repo } : {}),
+    ...(where?.branch ? { branch_hint: where.branch } : {}),
+    // A topic is a SUBJECT and not a head field (the relay already takes `subjects`, and a topic
+    // needs no lease). Empty means no topic -- an agenda of "" is not an agenda.
+    ...(subject ? { subjects: [{ kind: "topic", ref: subject.slice(0, TOPIC_MAX) }] } : {}),
+  };
+  try {
+    const { data } = await call("/v1/collabs", { method: "POST", body });
+    const opened = data?.collab?.collab_id;
+    // A channel that was created but cannot be named is worse than an error: the caller would go on
+    // to invite into nothing. Said here, where the reason is still known.
+    if (typeof opened !== "string" || opened === "") {
+      throw new Error("Der Relay hat den Kanal angelegt, aber keine collab_id genannt.");
+    }
+    return { collab_id: opened, workitem: id, existed: false };
+  } catch (e) {
+    const existing = e?.status === 409 ? String(e?.body?.collab_id ?? "") : "";
+    if (existing === "") throw e;
+    // A CHANNEL THAT STANDS IS NOT ONE THIS SESSION IS IN (review of WI 11554174). Writing,
+    // reserving and inviting all need `joined`, and the relay adds the opener only when it CREATES
+    // the channel -- a 409 means somebody else got there first, or this session called twice.
+    // Joining is the same act a human's surface performs when it opens an existing channel; a
+    // refusal is an answer too, and it is worth more than the 403 the caller would otherwise
+    // collect on its first write.
+    try {
+      await acceptCollab(existing, { cwd });
+      return { collab_id: existing, workitem: id, existed: true, joined: true };
+    } catch (joinError) {
+      return {
+        collab_id: existing,
+        workitem: id,
+        existed: true,
+        joined: false,
+        joinError: joinError?.message ?? String(joinError),
+      };
+    }
+  }
+}
+
 /**
  * The collabs THIS session is joined to. A person may be in several collabs at once (two
  * workitems, two colleagues) -- and the SAME person may have several sessions in one of them.
@@ -147,7 +218,8 @@ export async function resolveCollab(collabId) {
   if (joined.length === 1) return joined[0];
   if (joined.length === 0) {
     throw new Error(
-      "Diese Session ist in keinem Collab. Ein Collab wird im kwclaude-Fenster angenommen " +
+      "Diese Session ist in keinem Collab. Ein offener Kanal auf ihrem Workitem steht dir offen " +
+      "(collab_open); eine EINLADUNG wird im kwclaude-Fenster angenommen " +
       "(Einladung links in der Sitzungsliste) -- nicht von hier aus."
     );
   }

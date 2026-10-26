@@ -44,11 +44,19 @@ export async function call(path, { method = "GET", body, headers } = {}) {
     // A section-lease conflict carries the holder in the body, a denied invitation the reason --
     // read them out here so every caller does not have to parse a message string.
     let detail = text;
+    let parsed = null;
     try {
-      const parsed = JSON.parse(text);
+      parsed = JSON.parse(text);
       if (parsed?.error) detail = parsed.holder ? `${parsed.error} (gehalten von ${parsed.holder})` : parsed.error;
     } catch { /* not JSON: keep the raw text */ }
-    throw new Error(`Relay ${method} ${path} -> ${res.status}: ${detail}`);
+    const err = new Error(`Relay ${method} ${path} -> ${res.status}: ${detail}`);
+    // STATUS AND BODY travel WITH the error (WI 11554174). "Ein Kanal ist schon offen" (409) is not
+    // a refusal but an answer that names the channel that stands, and `collab_open` has to tell it
+    // apart from a real one. Reading it back out of the message text would be a second, fragile
+    // parse of a sentence that is written for humans.
+    err.status = res.status;
+    err.body = parsed;
+    throw err;
   }
 
   const queued = res.status === 202;

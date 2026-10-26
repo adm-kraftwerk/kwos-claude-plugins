@@ -723,3 +723,160 @@ test("collab_invite ohne Kanal nennt den Grund statt ins Leere zu greifen", asyn
     mock.restore();
   }
 });
+
+// ── Öffnen (WI 11554174) ────────────────────────────────────────────────────────────────────
+
+test("openCollab: das WORKITEM und die EIGENE session_id gehen hinaus, die Antwort nennt den Kanal", async () => {
+  const posted = [];
+  const mock = installFetchMock((url, init) => {
+    posted.push({ url, body: JSON.parse(String(init?.body ?? "{}")) });
+    return jsonResponse({ collab: { collab_id: "c-neu", workitem: "11554174" }, members: [], subjects: [] }, 201);
+  });
+  try {
+    const opened = await collab.openCollab({ workitem: "11554174", title: "Kanal aus dem Prompt", topic: "Wer baut was" });
+    assert.deepEqual(opened, { collab_id: "c-neu", workitem: "11554174", existed: false });
+    assert.equal(posted.length, 1);
+    assert.match(posted[0].url, /\/v1\/collabs$/);
+    assert.equal(posted[0].body.workitem, "11554174");
+    // Die Konversation, die der Relay als EIGENE pruefen kann -- nicht irgendeine.
+    assert.equal(posted[0].body.session_id, config.sessionId);
+    assert.equal(posted[0].body.title, "Kanal aus dem Prompt");
+    // Ein Thema ist ein SUBJECT, kein Kopffeld: es braucht keine Reservierung.
+    assert.deepEqual(posted[0].body.subjects, [{ kind: "topic", ref: "Wer baut was" }]);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("openCollab: ein schon offener Kanal ist eine ANTWORT -- und die Sitzung tritt ihm bei", async () => {
+  const seen = [];
+  const mock = installFetchMock((url) => {
+    seen.push(url.replace(/^https:\/\/[^/]+/, ""));
+    if (url.endsWith("/v1/collabs")) {
+      return jsonResponse({ error: "an open collab exists for this workitem", collab_id: "c-besteht" }, 409);
+    }
+    if (url.endsWith("/accept")) return jsonResponse({ joined: true }, 200);
+    return jsonResponse({}, 404);
+  });
+  try {
+    const opened = await collab.openCollab({ workitem: "11554174" });
+    assert.deepEqual(opened, { collab_id: "c-besteht", workitem: "11554174", existed: true, joined: true });
+    // Kein zweiter Kanal, aber ein Beitritt -- ohne ihn verweigert der Relay jeden Schreibvorgang.
+    assert.deepEqual(seen, ["/v1/collabs", "/v1/collabs/c-besteht/accept"]);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("openCollab: steht der Kanal und die Sitzung ist nicht eingeladen, ist DAS die Antwort", async () => {
+  const mock = installFetchMock((url) => {
+    if (url.endsWith("/v1/collabs")) {
+      return jsonResponse({ error: "an open collab exists for this workitem", collab_id: "c-fremd" }, 409);
+    }
+    return jsonResponse({ error: "not invited to this collab" }, 403);
+  });
+  try {
+    const opened = await collab.openCollab({ workitem: "11554174" });
+    assert.equal(opened.existed, true);
+    assert.equal(opened.joined, false);
+    assert.match(String(opened.joinError), /not invited to this collab/);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("collab_open: ein fremder Kanal wird nicht als eigener ausgegeben", async () => {
+  const { handleToolCall } = await import("../server/index.js");
+  const mock = installFetchMock((url) => {
+    if (url.endsWith("/v1/collabs")) {
+      return jsonResponse({ error: "an open collab exists for this workitem", collab_id: "c-fremd" }, 409);
+    }
+    return jsonResponse({ error: "not invited to this collab" }, 403);
+  });
+  try {
+    const out = await handleToolCall("collab_open", { workitem: "11554174" });
+    const text = out.content[0].text;
+    assert.match(text, /c-fremd/, "die Kennung des stehenden Kanals gehoert in die Antwort");
+    assert.match(text, /NICHT dabei/, "ohne Mitgliedschaft ist 'schreib dort weiter' falsch");
+    assert.match(text, /not invited to this collab/, "der Grund des Relays wird genannt");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("openCollab: ein 403 bleibt ein Fehler mit dem Satz des Relays (kein stiller Erfolg)", async () => {
+  const mock = installFetchMock(() => jsonResponse({ error: "session_id not owned by caller" }, 403));
+  try {
+    await assert.rejects(
+      () => collab.openCollab({ workitem: "11554174" }),
+      /403.*session_id not owned by caller/s,
+    );
+  } finally {
+    mock.restore();
+  }
+});
+
+test("collab_open: oeffnen und einladen sind EIN Zug -- und das Workitem kommt aus der Sitzung", async () => {
+  const { handleToolCall } = await import("../server/index.js");
+  const seen = [];
+  const mock = installFetchMock((url, init) => {
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    seen.push({ url, body });
+    if (url.endsWith("/v1/collabs")) return jsonResponse({ collab: { collab_id: "c-neu" } }, 201);
+    if (url.includes("/v1/people")) return jsonResponse({ people: [{ login: "u-0001", name: "Alex Beispiel" }] });
+    if (url.includes("/invites")) return jsonResponse({ invited: "u-0001" }, 201);
+    return jsonResponse({}, 404);
+  });
+  try {
+    const out = await handleToolCall("collab_open", {
+      workitem: "11554174",
+      person: "Alex Beispiel",
+      note: "kennt den Aufbau",
+    });
+    assert.match(out.content[0].text, /c-neu/);
+    assert.match(out.content[0].text, /Alex Beispiel/);
+    assert.match(out.content[0].text, /u-0001/);
+    assert.deepEqual(seen.map((c) => c.url.replace(/^https:\/\/[^/]+/, "")), [
+      "/v1/collabs",
+      "/v1/people?q=Alex%20Beispiel",
+      "/v1/collabs/c-neu/invites",
+    ]);
+    assert.equal(seen[2].body.subject, "u-0001");
+    assert.equal(seen[2].body.note, "kennt den Aufbau");
+    assert.equal(seen[2].body.via, "claude");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("collab_open: ohne Workitem wird GEFRAGT statt geraten", async () => {
+  const { handleToolCall } = await import("../server/index.js");
+  const before = config.workitem;
+  config.workitem = null;
+  const mock = installFetchMock(() => jsonResponse({}, 500));
+  try {
+    await assert.rejects(() => handleToolCall("collab_open", {}), /Welches Workitem/);
+    assert.equal(mock.calls.length, 0, "ohne Workitem geht keine Anfrage an den Relay");
+  } finally {
+    config.workitem = before;
+    mock.restore();
+  }
+});
+
+test("collab_open: eine gescheiterte Einladung nimmt die gute Nachricht nicht mit", async () => {
+  const { handleToolCall } = await import("../server/index.js");
+  const mock = installFetchMock((url) => {
+    if (url.endsWith("/v1/collabs")) return jsonResponse({ collab: { collab_id: "c-neu" } }, 201);
+    if (url.includes("/v1/people")) return jsonResponse({ people: [] });
+    return jsonResponse({}, 404);
+  });
+  try {
+    const out = await handleToolCall("collab_open", { workitem: "11554174", person: "Zoe Zufall" });
+    // Der Kanal STEHT -- das muss dastehen, sonst oeffnet der Mensch ihn ein zweites Mal.
+    assert.match(out.content[0].text, /c-neu/);
+    assert.match(out.content[0].text, /ging NICHT hinaus/);
+    assert.match(out.content[0].text, /Niemand passt zu "Zoe Zufall"/);
+  } finally {
+    mock.restore();
+  }
+});
