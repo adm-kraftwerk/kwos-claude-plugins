@@ -159,14 +159,33 @@ export function collabLine({ collabId, seq = null, from, kind, text, attachmentI
 }
 
 /**
- * The channel is gone (relay: `event: closed`, sent when somebody closes it). The session has to
- * hear that: a channel that quietly stops delivering looks like nobody is writing.
+ * The stream ended (relay: `event: closed`). The session has to hear that: a stream that quietly
+ * stops delivering looks like nobody is writing.
+ *
+ * THE REASON IS THE MESSAGE (measured 2026-10-26, the day this printed a lie). The relay uses the
+ * same event for three different things, and only the first one deletes anything:
+ *
+ *   undefined/"closed" -- somebody closed the channel; the protocol is gone
+ *   "access"           -- this member is out (kicked, left, or the workitem is no longer theirs):
+ *                         THE CHANNEL LIVES ON, and the next person it helps is somebody else
+ *   "check-failed"     -- the renewal could not be answered; the channel was never in question
+ *
+ * It said "Kanal beendet -- Protokoll auf dem Server geloescht" for all three, so a field report
+ * arrived as "was zur hoelle hat den kanal beendet?" about a channel that stood open the whole time
+ * with every line intact. A line the harness shows a human must say exactly as much as it knows.
  *
  * No `seq`: this is not a stored message, so there is nothing to fetch and nothing to name. The
  * head therefore keeps its seq-less form.
  */
-export function collabClosedLine(collabId) {
-  return `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)} | system] Kanal beendet -- Protokoll auf dem Server geloescht.`;
+export function collabClosedLine(collabId, reason = null) {
+  const head = `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)} | system]`;
+  if (reason === "access") {
+    return `${head} Kein Zugriff mehr auf diesen Kanal -- er besteht weiter, diese Sitzung ist nicht mehr Teil davon.`;
+  }
+  if (reason === "check-failed") {
+    return `${head} Die Zugriffspruefung ist fehlgeschlagen -- der Kanal besteht weiter, die Sitzung haengt sich neu an.`;
+  }
+  return `${head} Kanal beendet -- Protokoll auf dem Server geloescht.`;
 }
 
 /**
