@@ -140,8 +140,9 @@ export const TOOLS = [
       "den es weder Einladen noch Schreiben noch Reservieren gibt. Das Workitem kommt aus der " +
       "Sitzung (KWOS_WORKITEM), die Kennung der Konversation aus diesem Prozess; der Relay prüft, " +
       "dass sie dem Aufrufer gehört, und lässt EINEN offenen Kanal je Workitem zu. Steht schon einer " +
-      "offen, wird kein zweiter angelegt: die Antwort nennt den bestehenden, und der kann weiter " +
-      "benutzt werden. `person` und `note` laden im selben Zug ein (wie collab_invite). Nur öffnen, " +
+      "offen, wird kein zweiter angelegt: die Antwort nennt den bestehenden, und die Sitzung tritt " +
+      "ihm bei, wenn sie darf; sonst sagt sie, dass sie nicht dabei ist. `person` und `note` laden " +
+      "im selben Zug ein (wie collab_invite). Nur öffnen, " +
       "wenn dein Nutzer es verlangt oder die Arbeit es offensichtlich braucht.",
     inputSchema: {
       type: "object",
@@ -536,10 +537,14 @@ export async function handleToolCall(name, args = {}) {
       }
       const opened = await collab.openCollab({ workitem, title: args.title, topic: args.topic });
       const said = [
-        opened.existed
-          ? `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein ` +
-            `zweiter wird nicht angelegt, und dieser ist der, in dem du weiterschreibst.`
-          : `Kanal ${opened.collab_id} auf Workitem ${workitem} ist offen.`,
+        !opened.existed
+          ? `Kanal ${opened.collab_id} auf Workitem ${workitem} ist offen.`
+          : opened.joined
+            ? `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein ` +
+              `zweiter wird nicht angelegt; du bist ihm beigetreten und schreibst dort weiter.`
+            : `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein ` +
+              `zweiter wird nicht angelegt, und du bist NICHT dabei (${opened.joinError}). Ohne ` +
+              `Einladung kommst du nicht hinein; frag deinen Nutzer.`,
       ];
       // THE INVITATION IS THE SECOND HALF OF THE SAME ACT (like the surfaces' CollabOpen): a channel
       // nobody is in is an empty place. A refusal for the person must not read as "nothing happened"

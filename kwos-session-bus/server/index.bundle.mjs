@@ -16324,8 +16324,19 @@ async function openCollab({ workitem, title = "", topic = "", cwd: cwd2 = sessio
     return { collab_id: opened, workitem: id, existed: false };
   } catch (e) {
     const existing = e?.status === 409 ? String(e?.body?.collab_id ?? "") : "";
-    if (existing !== "") return { collab_id: existing, workitem: id, existed: true };
-    throw e;
+    if (existing === "") throw e;
+    try {
+      await acceptCollab(existing, { cwd: cwd2 });
+      return { collab_id: existing, workitem: id, existed: true, joined: true };
+    } catch (joinError) {
+      return {
+        collab_id: existing,
+        workitem: id,
+        existed: true,
+        joined: false,
+        joinError: joinError?.message ?? String(joinError)
+      };
+    }
   }
 }
 async function myJoinedCollabs() {
@@ -17342,7 +17353,7 @@ var TOOLS = [
   // Uebergeben und Schliessen bleiben Handlungen eines Menschen in der Oberflaeche.
   {
     name: "collab_open",
-    description: "\xD6ffnet den kwcollab-Kanal auf dem Workitem DIESER Sitzung (WI 11554174) -- der Schritt, ohne den es weder Einladen noch Schreiben noch Reservieren gibt. Das Workitem kommt aus der Sitzung (KWOS_WORKITEM), die Kennung der Konversation aus diesem Prozess; der Relay pr\xFCft, dass sie dem Aufrufer geh\xF6rt, und l\xE4sst EINEN offenen Kanal je Workitem zu. Steht schon einer offen, wird kein zweiter angelegt: die Antwort nennt den bestehenden, und der kann weiter benutzt werden. `person` und `note` laden im selben Zug ein (wie collab_invite). Nur \xF6ffnen, wenn dein Nutzer es verlangt oder die Arbeit es offensichtlich braucht.",
+    description: "\xD6ffnet den kwcollab-Kanal auf dem Workitem DIESER Sitzung (WI 11554174) -- der Schritt, ohne den es weder Einladen noch Schreiben noch Reservieren gibt. Das Workitem kommt aus der Sitzung (KWOS_WORKITEM), die Kennung der Konversation aus diesem Prozess; der Relay pr\xFCft, dass sie dem Aufrufer geh\xF6rt, und l\xE4sst EINEN offenen Kanal je Workitem zu. Steht schon einer offen, wird kein zweiter angelegt: die Antwort nennt den bestehenden, und die Sitzung tritt ihm bei, wenn sie darf; sonst sagt sie, dass sie nicht dabei ist. `person` und `note` laden im selben Zug ein (wie collab_invite). Nur \xF6ffnen, wenn dein Nutzer es verlangt oder die Arbeit es offensichtlich braucht.",
     inputSchema: {
       type: "object",
       properties: {
@@ -17602,7 +17613,7 @@ async function handleToolCall(name, args = {}) {
       }
       const opened = await openCollab({ workitem, title: args.title, topic: args.topic });
       const said = [
-        opened.existed ? `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein zweiter wird nicht angelegt, und dieser ist der, in dem du weiterschreibst.` : `Kanal ${opened.collab_id} auf Workitem ${workitem} ist offen.`
+        !opened.existed ? `Kanal ${opened.collab_id} auf Workitem ${workitem} ist offen.` : opened.joined ? `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein zweiter wird nicht angelegt; du bist ihm beigetreten und schreibst dort weiter.` : `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein zweiter wird nicht angelegt, und du bist NICHT dabei (${opened.joinError}). Ohne Einladung kommst du nicht hinein; frag deinen Nutzer.`
       ];
       if (String(args.person ?? "").trim() !== "") {
         try {

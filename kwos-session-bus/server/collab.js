@@ -99,9 +99,12 @@ export const TOPIC_MAX = 300;
  * now no party could open a channel from a prompt -- the route existed and the surfaces sent it, so
  * an agent had to ask a human to press `^b z` before it could invite, write or reserve anything.
  *
- * AN OPEN CHANNEL IS NOT A FAILURE: the relay allows one per workitem and answers 409 with the id of
- * the one that stands. That is returned as `existed: true`, so the caller can point at it instead of
- * opening a second (or invite into the one that is there).
+ * AN OPEN CHANNEL IS NOT A FAILURE, and it is not automatically THIS session's either: the relay
+ * allows one per workitem and answers 409 with the id of the one that stands. So the 409 branch
+ * tries the join (`acceptCollab`) -- the same act a human's surface performs on an existing channel.
+ * It succeeds when this session was invited or is already in; when it does not, the reason comes
+ * back as `joined: false` + `joinError` instead of being collected as a 403 "not a member" on the
+ * caller's first write.
  *
  * `repo_hint`/`branch_hint` are what the session works in, exactly like the join (`acceptCollab`) --
  * the relay shows them in the channel's head, and a directory without git simply leaves them out.
@@ -133,8 +136,25 @@ export async function openCollab({ workitem, title = "", topic = "", cwd = sessi
     return { collab_id: opened, workitem: id, existed: false };
   } catch (e) {
     const existing = e?.status === 409 ? String(e?.body?.collab_id ?? "") : "";
-    if (existing !== "") return { collab_id: existing, workitem: id, existed: true };
-    throw e;
+    if (existing === "") throw e;
+    // A CHANNEL THAT STANDS IS NOT ONE THIS SESSION IS IN (review of WI 11554174). Writing,
+    // reserving and inviting all need `joined`, and the relay adds the opener only when it CREATES
+    // the channel -- a 409 means somebody else got there first, or this session called twice.
+    // Joining is the same act a human's surface performs when it opens an existing channel; a
+    // refusal is an answer too, and it is worth more than the 403 the caller would otherwise
+    // collect on its first write.
+    try {
+      await acceptCollab(existing, { cwd });
+      return { collab_id: existing, workitem: id, existed: true, joined: true };
+    } catch (joinError) {
+      return {
+        collab_id: existing,
+        workitem: id,
+        existed: true,
+        joined: false,
+        joinError: joinError?.message ?? String(joinError),
+      };
+    }
   }
 }
 
