@@ -17679,17 +17679,28 @@ async function handleToolCall(name, args = {}) {
       const out = [];
       for (const c of joined) {
         const detail = await collabDetail(c.collab_id);
+        const members = detail?.members ?? [];
+        const connectedFlag = (v) => typeof v === "boolean" ? v : null;
+        const mine = members.find((m) => memberHasSession(m, config2.sessionId)) ?? null;
+        const myAgent = (mine?.agents ?? []).find((a) => a?.session_id === config2.sessionId) ?? null;
         out.push({
           collab_id: c.collab_id,
           workitem: c.workitem,
           title: c.title ?? null,
           paused: Boolean(c.paused),
           claude_streak: c.claude_streak ?? 0,
-          participants: (detail?.members ?? []).map((m) => ({
+          receiving: myAgent ? connectedFlag(myAgent.connected) : null,
+          participants: members.map((m) => ({
             subject: m.subject,
             name: m.display_name ?? null,
             role: m.role,
-            status: m.status
+            status: m.status,
+            connected: connectedFlag(m.connected),
+            agents: (m.agents ?? []).map((a) => ({
+              session_id: a?.session_id ?? null,
+              repo: a?.repo ?? null,
+              connected: connectedFlag(a?.connected)
+            }))
           })),
           subjects: detail?.subjects ?? [],
           leases: detail?.leases ?? []

@@ -626,6 +626,66 @@ test("handleToolCall: ein collab_*-Aufruf erreicht den Relay ohne Freigabeschalt
   }
 });
 
+test("collab_status nennt, wer zuhört -- und ob diese Sitzung selbst empfängt (WI 11569154)", async () => {
+  // Der Feldbericht konnte die eine Frage nicht beantworten: "beide joined" und trotzdem kam
+  // nichts an. Der Relay liefert seit dem Fix `connected` je Mitglied und je Agent; die Antwort
+  // des Werkzeugs muss es tragen, sonst bleibt die Frage wieder offen.
+  const { handleToolCall } = await import("../server/index.js");
+  const members = [
+    {
+      subject: "u-me", display_name: "Ich", role: "maintainer", status: "joined", connected: true,
+      agents: [{ session_id: "sess-self", connected: true }],
+    },
+    {
+      subject: "u-other", display_name: "Andere", role: "member", status: "joined", connected: false,
+      agents: [{ session_id: "s-other", connected: false }],
+    },
+  ];
+  const mock = installFetchMock((url) => {
+    if (/\/v1\/collabs\/[^/?#]+$/.test(url)) return jsonResponse({ members, subjects: [], leases: [] });
+    return jsonResponse({
+      collabs: [{
+        collab_id: "c-clock", workitem: "11569154", title: "Kanal", my_status: "joined",
+        paused: false, members,
+      }],
+    });
+  });
+  try {
+    const out = await handleToolCall("collab_status", {});
+    const [row] = JSON.parse(out.content[0].text);
+    assert.equal(row.receiving, true, "diese Sitzung hört (ihr Agent ist verbunden)");
+    const me = row.participants.find((p) => p.subject === "u-me");
+    const other = row.participants.find((p) => p.subject === "u-other");
+    assert.equal(me.connected, true);
+    assert.equal(other.connected, false, "die andere Seite ist Mitglied, hört aber nicht");
+    assert.equal(other.agents[0].connected, false);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("collab_status: ein Relay ohne das Feld macht niemanden offline", async () => {
+  // `null` heisst "der Relay hat es nicht gesagt" -- eine aeltere Fassung darf nicht so aussehen,
+  // als waere der ganze Kanal taub.
+  const { handleToolCall } = await import("../server/index.js");
+  const members = [{ subject: "u-me", role: "maintainer", status: "joined", agents: [{ session_id: "sess-self" }] }];
+  const mock = installFetchMock((url) => {
+    if (/\/v1\/collabs\/[^/?#]+$/.test(url)) return jsonResponse({ members, subjects: [], leases: [] });
+    return jsonResponse({
+      collabs: [{ collab_id: "c-old", workitem: "11569154", my_status: "joined", paused: false, members }],
+    });
+  });
+  try {
+    const out = await handleToolCall("collab_status", {});
+    const [row] = JSON.parse(out.content[0].text);
+    assert.equal(row.receiving, null);
+    assert.equal(row.participants[0].connected, null);
+    assert.equal(row.participants[0].agents[0].connected, null);
+  } finally {
+    mock.restore();
+  }
+});
+
 // ── Einladen über das Werkzeug (WI 11553520) ────────────────────────────────────────────────
 
 test("resolveInvitee: ein Login gewinnt, ein Name muss als Wortmenge exakt passen", () => {
