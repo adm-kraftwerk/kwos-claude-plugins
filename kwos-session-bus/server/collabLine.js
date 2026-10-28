@@ -66,10 +66,37 @@ export function collabShortId(collabId) {
  * could perfectly well fetch. `Number.isSafeInteger` (not `isInteger`) keeps a value that cannot be
  * a real sequence number -- 1e21, NaN, Infinity -- out of the head.
  */
-function collabHead({ collabId, seq, who, kind }) {
+function collabHead({ collabId, seq, who, kind, at }) {
   const n = Number(seq);
   const seqPart = Number.isSafeInteger(n) && n > 0 ? `:${n}` : "";
-  return `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)}${seqPart} | ${who} | ${kind}] `;
+  const clock = collabClock(at);
+  return `${COLLAB_LINE_PREFIX} ${collabShortId(collabId)}${seqPart} | ${who} | ${kind}${clock === "" ? "" : ` ${clock}`}] `;
+}
+
+/**
+ * The moment a line was written, in the one format JavaScript prints for a UTC instant:
+ * `2026-10-28T10:32:05Z` (`Date#toISOString` without the milliseconds), or "".
+ *
+ * WHY IT IS THERE (WI 11569154): the diagnosis report could not order its own observations --
+ * monitor lines carried no time at all, and two of them arrived in ONE delivery. The relay stores
+ * `created_at` with every line, so the moment the sentence was written is known.
+ *
+ * UTC, NOT THE LOCAL TIME (2026-10-28). A channel is shared across time zones: the same sentence
+ * would carry a different clock in every participant's transcript, and a finding that says "at
+ * 10:32 nobody had answered" would be wrong for everyone else. The relay, the database, the server
+ * log and the ISO form JavaScript writes are all UTC, so a session log can be put next to them
+ * without arithmetic -- and the date is part of it, which a bare clock is not.
+ *
+ * Unreadable or absent yields "" -- a line without a time, never an invented one (an older relay
+ * sends no `created_at`).
+ */
+export function collabClock(at) {
+  if (at === null || at === undefined || at === "") return "";
+  const d = at instanceof Date ? at : new Date(at);
+  if (Number.isNaN(d.getTime())) return "";
+  // Seconds, not milliseconds: this is read by a person, and the relay's own timestamps carry no
+  // more precision either.
+  return `${d.toISOString().slice(0, 19)}Z`;
 }
 
 /** The width the "(i/n) " counter costs for a run of `n` parts -- it counts against the budget. */
@@ -149,12 +176,12 @@ function splitIntoLines(head, body, { cap, safety }) {
  * A message with an attachment and no text is a valid case (a screenshot of the failure speaks for
  * itself), so the line names the attachment instead of ending in a colon with nothing after it.
  */
-export function collabLine({ collabId, seq = null, from, kind, text, attachmentId, cap = MONITOR_LINE_MAX, safety = LINE_SAFETY }) {
+export function collabLine({ collabId, seq = null, from, kind, text, attachmentId, at = null, cap = MONITOR_LINE_MAX, safety = LINE_SAFETY }) {
   const who = typeof from === "string" && from.trim() ? from.trim() : "?";
   const authorKind = COLLAB_KINDS.includes(kind) ? kind : "claude";
   let body = typeof text === "string" ? text.trim() : "";
   if (!body && attachmentId) body = `[Anhang: mit collab_get_attachment ${attachmentId} abrufbar]`;
-  const head = collabHead({ collabId, seq, who, kind: authorKind });
+  const head = collabHead({ collabId, seq, who, kind: authorKind, at });
   return splitIntoLines(head, body, { cap, safety });
 }
 

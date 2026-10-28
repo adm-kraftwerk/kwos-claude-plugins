@@ -51,17 +51,17 @@ import { codeServing as defaultCodeServing } from "./codeMonitor.js";
 /**
  * How often the monitor asks which channels this session is in.
  *
- * Short enough that joining feels immediate, long enough that an idle session does not hammer the
- * relay: one small GET (`SELECT … WHERE subject = $1`), and the plugin runs in EVERY session since
- * 2026-10-15. At a few hundred concurrent sessions that is single-digit requests per second --
- * cheap, but it is a cost that lasts for the whole life of every session, so it can be raised
- * without a new build: `KWOS_COLLAB_POLL_MS`.
+ * WHY 5 s AND NOT 15 s (WI 11569154, 2026-10-28): this poll is the JOIN LATENCY. A person presses
+ * "join", the surface says "joined", and nothing arrives until the next tick -- at 15 s that reads
+ * as "the channel is broken", which is exactly what the field report concluded. The query is one
+ * indexed GET (`WHERE subject = $1`); at a few hundred sessions 5 s is tens of requests per second,
+ * not thousands. An operator who disagrees can raise it without a new build: `KWOS_COLLAB_POLL_MS`.
  *
  * Validated like the marker interval (readCheckInterval): a typo must not become the interval --
  * `setInterval(fn, NaN)` fires every millisecond, and this one is a request against the relay in
  * every session of the fleet (review finding 2026-10-16).
  */
-export const COLLAB_POLL_MS = readCheckInterval(process.env.KWOS_COLLAB_POLL_MS, 15_000);
+export const COLLAB_POLL_MS = readCheckInterval(process.env.KWOS_COLLAB_POLL_MS, 5_000);
 
 /**
  * Is stdin a CHANNEL that the session really holds -- a pipe or a socket?
@@ -210,6 +210,9 @@ export function frameToLine(raw, { members = [], selfSessionId = null, selfSubje
     kind: msg.author_kind,
     text: msg.author_kind === "system" ? systemText(msg.text, members, selfSessionId) : msg.text,
     attachmentId: msg.attachment_id,
+    // WHEN IT WAS WRITTEN, not when the frame arrived (WI 11569154): the relay replays on
+    // reconnect and the harness bundles lines, so arrival is not the time of the sentence.
+    at: msg.created_at,
   });
 }
 

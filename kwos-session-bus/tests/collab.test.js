@@ -626,6 +626,66 @@ test("handleToolCall: ein collab_*-Aufruf erreicht den Relay ohne Freigabeschalt
   }
 });
 
+test("collab_status nennt, wer zuhört -- und ob diese Sitzung selbst empfängt (WI 11569154)", async () => {
+  // Der Feldbericht konnte die eine Frage nicht beantworten: "beide joined" und trotzdem kam
+  // nichts an. Der Relay liefert seit dem Fix `connected` je Mitglied und je Agent; die Antwort
+  // des Werkzeugs muss es tragen, sonst bleibt die Frage wieder offen.
+  const { handleToolCall } = await import("../server/index.js");
+  const members = [
+    {
+      subject: "u-me", display_name: "Ich", role: "maintainer", status: "joined", connected: true,
+      agents: [{ session_id: "sess-self", connected: true }],
+    },
+    {
+      subject: "u-other", display_name: "Andere", role: "member", status: "joined", connected: false,
+      agents: [{ session_id: "s-other", connected: false }],
+    },
+  ];
+  const mock = installFetchMock((url) => {
+    if (/\/v1\/collabs\/[^/?#]+$/.test(url)) return jsonResponse({ members, subjects: [], leases: [] });
+    return jsonResponse({
+      collabs: [{
+        collab_id: "c-clock", workitem: "11569154", title: "Kanal", my_status: "joined",
+        paused: false, members,
+      }],
+    });
+  });
+  try {
+    const out = await handleToolCall("collab_status", {});
+    const [row] = JSON.parse(out.content[0].text);
+    assert.equal(row.receiving, true, "diese Sitzung hört (ihr Agent ist verbunden)");
+    const me = row.participants.find((p) => p.subject === "u-me");
+    const other = row.participants.find((p) => p.subject === "u-other");
+    assert.equal(me.connected, true);
+    assert.equal(other.connected, false, "die andere Seite ist Mitglied, hört aber nicht");
+    assert.equal(other.agents[0].connected, false);
+  } finally {
+    mock.restore();
+  }
+});
+
+test("collab_status: ein Relay ohne das Feld macht niemanden offline", async () => {
+  // `null` heisst "der Relay hat es nicht gesagt" -- eine aeltere Fassung darf nicht so aussehen,
+  // als waere der ganze Kanal taub.
+  const { handleToolCall } = await import("../server/index.js");
+  const members = [{ subject: "u-me", role: "maintainer", status: "joined", agents: [{ session_id: "sess-self" }] }];
+  const mock = installFetchMock((url) => {
+    if (/\/v1\/collabs\/[^/?#]+$/.test(url)) return jsonResponse({ members, subjects: [], leases: [] });
+    return jsonResponse({
+      collabs: [{ collab_id: "c-old", workitem: "11569154", my_status: "joined", paused: false, members }],
+    });
+  });
+  try {
+    const out = await handleToolCall("collab_status", {});
+    const [row] = JSON.parse(out.content[0].text);
+    assert.equal(row.receiving, null);
+    assert.equal(row.participants[0].connected, null);
+    assert.equal(row.participants[0].agents[0].connected, null);
+  } finally {
+    mock.restore();
+  }
+});
+
 // ── Einladen über das Werkzeug (WI 11553520) ────────────────────────────────────────────────
 
 test("resolveInvitee: ein Login gewinnt, ein Name muss als Wortmenge exakt passen", () => {
@@ -818,6 +878,8 @@ test("openCollab: ein 403 bleibt ein Fehler mit dem Satz des Relays (kein stille
 
 test("collab_open: oeffnen und einladen sind EIN Zug -- und das Workitem kommt aus der Sitzung", async () => {
   const { handleToolCall } = await import("../server/index.js");
+  // Same module, same import time as the code under test -- see the derived expectation below.
+  const { config } = await import("../server/config.js");
   const seen = [];
   const mock = installFetchMock((url, init) => {
     const body = JSON.parse(String(init?.body ?? "{}"));
@@ -838,7 +900,15 @@ test("collab_open: oeffnen und einladen sind EIN Zug -- und das Workitem kommt a
     assert.match(out.content[0].text, /u-0001/);
     assert.deepEqual(seen.map((c) => c.url.replace(/^https:\/\/[^/]+/, "")), [
       "/v1/collabs",
-      "/v1/people?q=Alex%20Beispiel",
+      // The workitem narrows the search to people who can ACCEPT the invitation (WI 11569154):
+      // the team roster offered colleagues whose access nobody had checked.
+      //
+      // FROM THE SESSION, AND THAT IS THE PROBLEM (fixed 2026-10-28): `config.workitem` is read
+      // from `KWOS_WORKITEM` ONCE, when the module is imported -- so this expectation used to be
+      // whatever workitem the machine running the suite happened to be bound to. It was green on
+      // the author's machine (his session) and red on every other one, including CI, where the
+      // variable is absent and the ARGUMENT wins. Derived here from the same source the code uses.
+      `/v1/people?q=Alex%20Beispiel&workitem=${config.workitem ?? "11554174"}`,
       "/v1/collabs/c-neu/invites",
     ]);
     assert.equal(seen[2].body.subject, "u-0001");

@@ -16340,6 +16340,7 @@ async function openCollab({ workitem, title = "", topic = "", cwd: cwd2 = sessio
   } catch (e) {
     const existing = e?.status === 409 ? String(e?.body?.collab_id ?? "") : "";
     if (existing === "") throw e;
+    const lead = typeof e?.body?.maintainer === "string" ? e.body.maintainer.trim() : "";
     try {
       await acceptCollab(existing, { cwd: cwd2 });
       return { collab_id: existing, workitem: id, existed: true, joined: true };
@@ -16349,7 +16350,8 @@ async function openCollab({ workitem, title = "", topic = "", cwd: cwd2 = sessio
         workitem: id,
         existed: true,
         joined: false,
-        joinError: joinError?.message ?? String(joinError)
+        joinError: joinError?.message ?? String(joinError),
+        maintainer: lead === "" ? null : lead
       };
     }
   }
@@ -16459,10 +16461,11 @@ async function acquireLease(collabId, { subjectId, subject, section, ttlSec, exc
 async function releaseLease(collabId, leaseId) {
   await call(`/v1/collabs/${encodeURIComponent(collabId)}/leases/${encodeURIComponent(leaseId)}`, { method: "DELETE" });
 }
-async function searchPeople(query) {
+async function searchPeople(query, workitem = config2.workitem) {
   const q = String(query ?? "").trim();
   if (q.length < 2) return [];
-  const { data } = await call(`/v1/people?q=${encodeURIComponent(q)}`);
+  const narrow = /^\d{5,}$/.test(String(workitem ?? "").trim()) ? `&workitem=${encodeURIComponent(String(workitem).trim())}` : "";
+  const { data } = await call(`/v1/people?q=${encodeURIComponent(q)}${narrow}`);
   return Array.isArray(data?.people) ? data.people : [];
 }
 var foldText = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/ß/g, "ss").toLowerCase();
@@ -17633,7 +17636,9 @@ async function handleToolCall(name, args = {}) {
       }
       const opened = await openCollab({ workitem, title: args.title, topic: args.topic });
       const said = [
-        !opened.existed ? `Kanal ${opened.collab_id} auf Workitem ${workitem} ist offen.` : opened.joined ? `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein zweiter wird nicht angelegt; du bist ihm beigetreten und schreibst dort weiter.` : `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein zweiter wird nicht angelegt, und du bist NICHT dabei (${opened.joinError}). Ohne Einladung kommst du nicht hinein; frag deinen Nutzer.`
+        !opened.existed ? `Kanal ${opened.collab_id} auf Workitem ${workitem} ist offen.` : opened.joined ? `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein zweiter wird nicht angelegt; du bist ihm beigetreten und schreibst dort weiter.` : `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein zweiter wird nicht angelegt, und du bist NICHT dabei (${opened.joinError}). ` + // WHO CAN LET YOU IN (WI 11569154): "frag deinen Nutzer" was a direction without an
+        // address -- the person who leads the channel is the only one who can invite.
+        (opened.maintainer ? `Die Leitung ist ${opened.maintainer}; nur sie kann dich einladen.` : `Ohne Einladung kommst du nicht hinein; die Leitung des Kanals kann dich einladen.`)
       ];
       if (String(args.person ?? "").trim() !== "") {
         try {
@@ -17679,17 +17684,28 @@ async function handleToolCall(name, args = {}) {
       const out = [];
       for (const c of joined) {
         const detail = await collabDetail(c.collab_id);
+        const members = detail?.members ?? [];
+        const connectedFlag = (v) => typeof v === "boolean" ? v : null;
+        const mine = members.find((m) => memberHasSession(m, config2.sessionId)) ?? null;
+        const myAgent = (mine?.agents ?? []).find((a) => a?.session_id === config2.sessionId) ?? null;
         out.push({
           collab_id: c.collab_id,
           workitem: c.workitem,
           title: c.title ?? null,
           paused: Boolean(c.paused),
           claude_streak: c.claude_streak ?? 0,
-          participants: (detail?.members ?? []).map((m) => ({
+          receiving: myAgent ? connectedFlag(myAgent.connected) : null,
+          participants: members.map((m) => ({
             subject: m.subject,
             name: m.display_name ?? null,
             role: m.role,
-            status: m.status
+            status: m.status,
+            connected: connectedFlag(m.connected),
+            agents: (m.agents ?? []).map((a) => ({
+              session_id: a?.session_id ?? null,
+              repo: a?.repo ?? null,
+              connected: connectedFlag(a?.connected)
+            }))
           })),
           subjects: detail?.subjects ?? [],
           leases: detail?.leases ?? []

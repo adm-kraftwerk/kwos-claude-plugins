@@ -553,8 +553,12 @@ export async function handleToolCall(name, args = {}) {
             ? `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein ` +
               `zweiter wird nicht angelegt; du bist ihm beigetreten und schreibst dort weiter.`
             : `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein ` +
-              `zweiter wird nicht angelegt, und du bist NICHT dabei (${opened.joinError}). Ohne ` +
-              `Einladung kommst du nicht hinein; frag deinen Nutzer.`,
+              `zweiter wird nicht angelegt, und du bist NICHT dabei (${opened.joinError}). ` +
+              // WHO CAN LET YOU IN (WI 11569154): "frag deinen Nutzer" was a direction without an
+              // address -- the person who leads the channel is the only one who can invite.
+              (opened.maintainer
+                ? `Die Leitung ist ${opened.maintainer}; nur sie kann dich einladen.`
+                : `Ohne Einladung kommst du nicht hinein; die Leitung des Kanals kann dich einladen.`),
       ];
       // THE INVITATION IS THE SECOND HALF OF THE SAME ACT (like the surfaces' CollabOpen): a channel
       // nobody is in is an empty place. A refusal for the person must not read as "nothing happened"
@@ -616,14 +620,35 @@ export async function handleToolCall(name, args = {}) {
       const out = [];
       for (const c of joined) {
         const detail = await collab.collabDetail(c.collab_id);
+        const members = detail?.members ?? [];
+        // WHO IS ACTUALLY LISTENING, NOT ONLY WHO IS A MEMBER (WI 11569154). The relay's channel
+        // detail opens with its stream registry (`connected` per member and per agent); this answer
+        // dropped the field, so the question the field report could not settle -- "is the other
+        // side receiving?" -- stayed unanswerable for the agent too.
+        //
+        // `null` where the relay did not say (a relay from before the field), never `false`: an
+        // older server must not make every participant look offline.
+        const connectedFlag = (v) => (typeof v === "boolean" ? v : null);
+        // And the same question about OURSELVES: this session's agent in this channel. A monitor
+        // that died leaves the row `joined` and the session deaf -- and nothing in the session said
+        // so. `receiving: false` is the one line that turns that into a diagnosable state.
+        const mine = members.find((m) => collab.memberHasSession(m, config.sessionId)) ?? null;
+        const myAgent = (mine?.agents ?? []).find((a) => a?.session_id === config.sessionId) ?? null;
         out.push({
           collab_id: c.collab_id,
           workitem: c.workitem,
           title: c.title ?? null,
           paused: Boolean(c.paused),
           claude_streak: c.claude_streak ?? 0,
-          participants: (detail?.members ?? []).map((m) => ({
+          receiving: myAgent ? connectedFlag(myAgent.connected) : null,
+          participants: members.map((m) => ({
             subject: m.subject, name: m.display_name ?? null, role: m.role, status: m.status,
+            connected: connectedFlag(m.connected),
+            agents: (m.agents ?? []).map((a) => ({
+              session_id: a?.session_id ?? null,
+              repo: a?.repo ?? null,
+              connected: connectedFlag(a?.connected),
+            })),
           })),
           subjects: detail?.subjects ?? [],
           leases: detail?.leases ?? [],
