@@ -878,6 +878,8 @@ test("openCollab: ein 403 bleibt ein Fehler mit dem Satz des Relays (kein stille
 
 test("collab_open: oeffnen und einladen sind EIN Zug -- und das Workitem kommt aus der Sitzung", async () => {
   const { handleToolCall } = await import("../server/index.js");
+  // Same module, same import time as the code under test -- see the derived expectation below.
+  const { config } = await import("../server/config.js");
   const seen = [];
   const mock = installFetchMock((url, init) => {
     const body = JSON.parse(String(init?.body ?? "{}"));
@@ -900,7 +902,13 @@ test("collab_open: oeffnen und einladen sind EIN Zug -- und das Workitem kommt a
       "/v1/collabs",
       // The workitem narrows the search to people who can ACCEPT the invitation (WI 11569154):
       // the team roster offered colleagues whose access nobody had checked.
-      "/v1/people?q=Alex%20Beispiel&workitem=11569154",
+      //
+      // FROM THE SESSION, AND THAT IS THE PROBLEM (fixed 2026-10-28): `config.workitem` is read
+      // from `KWOS_WORKITEM` ONCE, when the module is imported -- so this expectation used to be
+      // whatever workitem the machine running the suite happened to be bound to. It was green on
+      // the author's machine (his session) and red on every other one, including CI, where the
+      // variable is absent and the ARGUMENT wins. Derived here from the same source the code uses.
+      `/v1/people?q=Alex%20Beispiel&workitem=${config.workitem ?? "11554174"}`,
       "/v1/collabs/c-neu/invites",
     ]);
     assert.equal(seen[2].body.subject, "u-0001");
