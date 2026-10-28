@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  collabLine, collabClosedLine, collabShortId, senderName, COLLAB_LINE_PREFIX,
+  collabClock, collabLine, collabClosedLine, collabShortId, senderName, COLLAB_LINE_PREFIX,
   MONITOR_LINE_MAX, LINE_SAFETY,
 } from "../server/collabLine.js";
 import { frameToLine } from "../server/collab-listen.js";
@@ -53,6 +53,25 @@ test("collabLine: eine unbrauchbare seq faellt weg -- kein ':NaN' und kein ':1e+
     const [line] = collabLine({ collabId: COLLAB, seq: bad, from: "Mara K.", kind: "claude", text: "t" });
     assert.equal(line, "[kwcollab 7f3a1b2c | Mara K. | claude] t", `seq=${String(bad)}`);
   }
+});
+
+test("collabLine: die Uhrzeit steht an der Zeile, in der Zeit des Lesers (WI 11569154)", () => {
+  // Der Feldbericht konnte seine eigenen Beobachtungen nicht ordnen: Monitor-Zeilen trugen keine
+  // Zeit, und zwei kamen in EINER Zustellung. Die Zeit kommt aus `created_at`, nicht aus der
+  // Ankunft -- der Relay spielt bei Reconnect nach.
+  const local = new Date(2026, 9, 28, 10, 32, 5);
+  const [line] = collabLine({ collabId: COLLAB, seq: 7, from: "Mara K.", kind: "human", text: "hallo", at: local });
+  assert.equal(line, "[kwcollab 7f3a1b2c:7 | Mara K. | human 10:32] hallo");
+  // Ohne (oder mit kaputter) Zeit bleibt die Zeile wie vorher -- nie eine erfundene Uhrzeit.
+  const [plain] = collabLine({ collabId: COLLAB, seq: 7, from: "Mara K.", kind: "human", text: "hallo" });
+  assert.equal(plain, "[kwcollab 7f3a1b2c:7 | Mara K. | human] hallo");
+  assert.equal(collabClock("keine Zeit"), "");
+  assert.equal(collabClock(null), "");
+  assert.equal(collabClock(""), "");
+});
+
+test("collabClock: fuehrende Nullen, damit die Zeilen untereinander ausgerichtet bleiben", () => {
+  assert.equal(collabClock(new Date(2026, 0, 2, 7, 5)), "07:05");
 });
 
 test("collabLine: ein Mensch wird als Mensch gekennzeichnet", () => {
@@ -300,6 +319,18 @@ test("frameToLine: eine fremde Nachricht wird zu einer Kanal-Zeile mit ihrer seq
     members: [{ subject: "u-mara", display_name: "Mara K." }], selfSessionId: "s-me",
   });
   assert.deepEqual(lines, ["[kwcollab 7f3a1b2c:7 | Mara K. | claude] 12 Requests, alle 200."]);
+});
+
+test("frameToLine: die Uhrzeit kommt aus der Nachricht, nicht aus der Ankunft (WI 11569154)", () => {
+  const at = new Date(2026, 9, 28, 9, 4);
+  const raw = JSON.stringify({
+    seq: 21, collab_id: COLLAB, from_session: "s-mara",
+    from_subject: "u-mara", author_kind: "claude", text: "Befund.", created_at: at.toISOString(),
+  });
+  const lines = frameToLine(raw, {
+    members: [{ subject: "u-mara", display_name: "Mara K." }], selfSessionId: "s-me",
+  });
+  assert.deepEqual(lines, ["[kwcollab 7f3a1b2c:21 | Mara K. | claude 09:04] Befund."]);
 });
 
 test("frameToLine: eine lange Nachricht wird zu MEHREREN Zeilen, in Reihenfolge", () => {

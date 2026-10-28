@@ -210,6 +210,9 @@ export function frameToLine(raw, { members = [], selfSessionId = null, selfSubje
     kind: msg.author_kind,
     text: msg.author_kind === "system" ? systemText(msg.text, members, selfSessionId) : msg.text,
     attachmentId: msg.attachment_id,
+    // WHEN IT WAS WRITTEN, not when the frame arrived (WI 11569154): the relay replays on
+    // reconnect and the harness bundles lines, so arrival is not the time of the sentence.
+    at: msg.created_at,
   });
 }
 
