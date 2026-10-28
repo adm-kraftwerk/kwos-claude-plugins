@@ -55,13 +55,20 @@ test("collabLine: eine unbrauchbare seq faellt weg -- kein ':NaN' und kein ':1e+
   }
 });
 
-test("collabLine: die Uhrzeit steht an der Zeile, in der Zeit des Lesers (WI 11569154)", () => {
+test("collabLine: die Zeit steht an der Zeile, als JavaScript-ISO in UTC (WI 11569154)", () => {
   // Der Feldbericht konnte seine eigenen Beobachtungen nicht ordnen: Monitor-Zeilen trugen keine
   // Zeit, und zwei kamen in EINER Zustellung. Die Zeit kommt aus `created_at`, nicht aus der
   // Ankunft -- der Relay spielt bei Reconnect nach.
-  const local = new Date(2026, 9, 28, 10, 32, 5);
-  const [line] = collabLine({ collabId: COLLAB, seq: 7, from: "Mara K.", kind: "human", text: "hallo", at: local });
-  assert.equal(line, "[kwcollab 7f3a1b2c:7 | Mara K. | human 10:32] hallo");
+  //
+  // UTC UND NICHT ORTSZEIT: ein Kanal wird ueber Zeitzonen hinweg geteilt. Dieselbe Zeile truege
+  // sonst in jedem Verlauf eine andere Uhr, und ein Befund "um 10:32 hatte niemand geantwortet"
+  // waere fuer alle anderen falsch. Der Zeitstempel ist ein fester Zeitpunkt, und der Test prueft
+  // ihn unabhaengig von der Zone dieser Maschine.
+  const [line] = collabLine({
+    collabId: COLLAB, seq: 7, from: "Mara K.", kind: "human", text: "hallo",
+    at: "2026-10-28T10:32:05Z",
+  });
+  assert.equal(line, "[kwcollab 7f3a1b2c:7 | Mara K. | human 2026-10-28T10:32:05Z] hallo");
   // Ohne (oder mit kaputter) Zeit bleibt die Zeile wie vorher -- nie eine erfundene Uhrzeit.
   const [plain] = collabLine({ collabId: COLLAB, seq: 7, from: "Mara K.", kind: "human", text: "hallo" });
   assert.equal(plain, "[kwcollab 7f3a1b2c:7 | Mara K. | human] hallo");
@@ -70,8 +77,14 @@ test("collabLine: die Uhrzeit steht an der Zeile, in der Zeit des Lesers (WI 115
   assert.equal(collabClock(""), "");
 });
 
-test("collabClock: fuehrende Nullen, damit die Zeilen untereinander ausgerichtet bleiben", () => {
-  assert.equal(collabClock(new Date(2026, 0, 2, 7, 5)), "07:05");
+test("collabClock: derselbe Zeitpunkt in derselben Schreibweise, unabhaengig von der Zone dieser Maschine", () => {
+  // 07:05Z ist 09:05 in Berlin. Kaeme hier eine Ortszeit heraus, laese ein Kollege in einer anderen
+  // Zone eine andere Uhr als der Rest des Kanals. JavaScript schreibt den Zeitpunkt als ISO mit
+  // `Z`; genau die Form kommt hier heraus, ohne Millisekunden.
+  assert.equal(collabClock("2026-01-02T07:05:00Z"), "2026-01-02T07:05:00Z");
+  assert.equal(collabClock(new Date(Date.UTC(2026, 0, 2, 7, 5))), "2026-01-02T07:05:00Z");
+  // Millisekunden fallen weg: gelesen wird das von einem Menschen, und der Relay traegt sie nicht.
+  assert.equal(collabClock("2026-01-02T07:05:00.123Z"), "2026-01-02T07:05:00Z");
 });
 
 test("collabLine: ein Mensch wird als Mensch gekennzeichnet", () => {
@@ -321,16 +334,16 @@ test("frameToLine: eine fremde Nachricht wird zu einer Kanal-Zeile mit ihrer seq
   assert.deepEqual(lines, ["[kwcollab 7f3a1b2c:7 | Mara K. | claude] 12 Requests, alle 200."]);
 });
 
-test("frameToLine: die Uhrzeit kommt aus der Nachricht, nicht aus der Ankunft (WI 11569154)", () => {
-  const at = new Date(2026, 9, 28, 9, 4);
+test("frameToLine: die Zeit kommt aus der Nachricht, nicht aus der Ankunft (WI 11569154)", () => {
   const raw = JSON.stringify({
     seq: 21, collab_id: COLLAB, from_session: "s-mara",
-    from_subject: "u-mara", author_kind: "claude", text: "Befund.", created_at: at.toISOString(),
+    from_subject: "u-mara", author_kind: "claude", text: "Befund.",
+    created_at: "2026-10-28T09:04:00.412Z",
   });
   const lines = frameToLine(raw, {
     members: [{ subject: "u-mara", display_name: "Mara K." }], selfSessionId: "s-me",
   });
-  assert.deepEqual(lines, ["[kwcollab 7f3a1b2c:21 | Mara K. | claude 09:04] Befund."]);
+  assert.deepEqual(lines, ["[kwcollab 7f3a1b2c:21 | Mara K. | claude 2026-10-28T09:04:00Z] Befund."]);
 });
 
 test("frameToLine: eine lange Nachricht wird zu MEHREREN Zeilen, in Reihenfolge", () => {
