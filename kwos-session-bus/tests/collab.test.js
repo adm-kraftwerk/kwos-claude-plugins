@@ -898,7 +898,9 @@ test("collab_open: oeffnen und einladen sind EIN Zug -- und das Workitem kommt a
     assert.match(out.content[0].text, /u-0001/);
     assert.deepEqual(seen.map((c) => c.url.replace(/^https:\/\/[^/]+/, "")), [
       "/v1/collabs",
-      "/v1/people?q=Alex%20Beispiel",
+      // The workitem narrows the search to people who can ACCEPT the invitation (WI 11569154):
+      // the team roster offered colleagues whose access nobody had checked.
+      "/v1/people?q=Alex%20Beispiel&workitem=11569154",
       "/v1/collabs/c-neu/invites",
     ]);
     assert.equal(seen[2].body.subject, "u-0001");

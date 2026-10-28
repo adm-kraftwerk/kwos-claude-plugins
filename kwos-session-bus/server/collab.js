@@ -150,6 +150,9 @@ export async function openCollab({ workitem, title = "", topic = "", cwd = sessi
   } catch (e) {
     const existing = e?.status === 409 ? String(e?.body?.collab_id ?? "") : "";
     if (existing === "") throw e;
+    // WHO TO ASK, from the same answer (WI 11569154): a channel on this workitem that this session
+    // is not in is a dead end unless the sentence names the one person who can let it in.
+    const lead = typeof e?.body?.maintainer === "string" ? e.body.maintainer.trim() : "";
     // A CHANNEL THAT STANDS IS NOT ONE THIS SESSION IS IN (review of WI 11554174). Writing,
     // reserving and inviting all need `joined`, and the relay adds the opener only when it CREATES
     // the channel -- a 409 means somebody else got there first, or this session called twice.
@@ -166,6 +169,7 @@ export async function openCollab({ workitem, title = "", topic = "", cwd = sessi
         existed: true,
         joined: false,
         joinError: joinError?.message ?? String(joinError),
+        maintainer: lead === "" ? null : lead,
       };
     }
   }
@@ -406,11 +410,17 @@ export function collabEventsUrl(collabId) {
 // and its two budgets apply. This file resolves names and makes one POST.
 
 /** The person search the invite field uses: GET /v1/people?q= (relay, with this person's token). */
-export async function searchPeople(query) {
+export async function searchPeople(query, workitem = config.workitem) {
   const q = String(query ?? "").trim();
   // Same threshold as the relay (`okPeopleQuery`): one letter matches half the company.
   if (q.length < 2) return [];
-  const { data } = await call(`/v1/people?q=${encodeURIComponent(q)}`);
+  // THE WORKITEM NARROWS THE LIST TO PEOPLE WHO CAN ACCEPT (WI 11569154). Without it the roster
+  // offered colleagues whose access nobody had checked, and the invitation failed at ACCEPT -- on
+  // the invited person's side, who can do nothing about a 403.
+  const narrow = /^\d{5,}$/.test(String(workitem ?? "").trim())
+    ? `&workitem=${encodeURIComponent(String(workitem).trim())}`
+    : "";
+  const { data } = await call(`/v1/people?q=${encodeURIComponent(q)}${narrow}`);
   return Array.isArray(data?.people) ? data.people : [];
 }
 

@@ -553,8 +553,12 @@ export async function handleToolCall(name, args = {}) {
             ? `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein ` +
               `zweiter wird nicht angelegt; du bist ihm beigetreten und schreibst dort weiter.`
             : `Auf Workitem ${workitem} stand schon ein Kanal offen (${opened.collab_id}) -- ein ` +
-              `zweiter wird nicht angelegt, und du bist NICHT dabei (${opened.joinError}). Ohne ` +
-              `Einladung kommst du nicht hinein; frag deinen Nutzer.`,
+              `zweiter wird nicht angelegt, und du bist NICHT dabei (${opened.joinError}). ` +
+              // WHO CAN LET YOU IN (WI 11569154): "frag deinen Nutzer" was a direction without an
+              // address -- the person who leads the channel is the only one who can invite.
+              (opened.maintainer
+                ? `Die Leitung ist ${opened.maintainer}; nur sie kann dich einladen.`
+                : `Ohne Einladung kommst du nicht hinein; die Leitung des Kanals kann dich einladen.`),
       ];
       // THE INVITATION IS THE SECOND HALF OF THE SAME ACT (like the surfaces' CollabOpen): a channel
       // nobody is in is an empty place. A refusal for the person must not read as "nothing happened"
