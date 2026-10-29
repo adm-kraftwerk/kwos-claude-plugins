@@ -26,6 +26,19 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "cd \"$HOME\" 2>/dev/null || cd /; node \"${CLAUDE_PLUGIN_ROOT}/hooks/teams-guard.js\" userpromptsubmit",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit",
@@ -35,6 +48,17 @@
             "shell": "bash",
             "command": "cd \"$HOME\" 2>/dev/null || cd /; node \"${CLAUDE_PLUGIN_ROOT}/hooks/code-hook.js\" pretooluse",
             "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__ms365__send-chat-message|mcp__ms365__send-channel-message",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "cd \"$HOME\" 2>/dev/null || cd /; node \"${CLAUDE_PLUGIN_ROOT}/hooks/teams-guard.js\" pretooluse",
+            "timeout": 5
           }
         ]
       }
