@@ -42,10 +42,15 @@ export const HINT =
  * What the hook prints for one event, or `null` (nothing to say).
  *
  * `event` is the hook name in lower case, the spelling `hooks.json` passes on the command line.
+ * `inCollab` says whether THIS session is a member of an open channel -- the hook asks the relay
+ * (`hooks/teams-guard.js`, `myJoinedCollabs`) and hands the answer in, so this function stays
+ * pure. Without it there is no hint: somebody who is not in a channel must not be pointed at
+ * one.
+ *
  * No `permissionDecision` is ever returned: the call always goes through.
  */
-export function hookAnswer(event, payload) {
-  if (event !== "pretooluse") return null;
+export function hookAnswer(event, payload, inCollab = false) {
+  if (event !== "pretooluse" || inCollab !== true) return null;
   const name = typeof payload?.tool_name === "string" ? payload.tool_name : "";
   if (!MS365_SEND.test(name)) return null;
   return { hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: HINT } };
