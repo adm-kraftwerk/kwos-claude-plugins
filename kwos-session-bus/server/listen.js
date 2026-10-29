@@ -21,6 +21,7 @@ import { config, ensureSessionId, refreshSessionId } from "./config.js";
 import { isMainModule } from "./is-main.js";
 import { log } from "./log.js";
 import * as relay from "./relay-client.js";
+import { rememberSessionCursor, readSessionCursor } from "./sessionCursor.js";
 import { runSseReceiver } from "./sse-receiver.js";
 
 // Bild-Upload (WI 10460008, Phase 2): relay/lib.js serialize() liefert jetzt attachment_id mit
@@ -238,7 +239,17 @@ export async function startRelayListener({ writeLine } = {}) {
   }, config.sessionIdCheckMs);
 
   function receive(ctrl) {
-    runSseReceiver(forwardToWriter(out), { signal: ctrl.signal }).catch((err) => {
+    // WHERE THIS SESSION LEFT OFF, ON DISK (measured 2026-10-29). In memory the id only survives a
+    // reconnect; a new process (crash, sleep, --resume) started at zero, and the relay answers a
+    // cursorless connect with only what is still undelivered -- so a message whose frame had been
+    // written but not yet printed never came again. The relay has sent `id:` all along; this is the
+    // note that turns it into a resume.
+    const sessionId = config.sessionId;
+    runSseReceiver(forwardToWriter(out), {
+      signal: ctrl.signal,
+      since: readSessionCursor(sessionId),
+      onEventId: (id) => rememberSessionCursor(sessionId, id),
+    }).catch((err) => {
       // Only reachable for a failure the receiver itself does not swallow; its own reconnect loop
       // handles a dead stream. Worth a line, not a crash.
       if (!ctrl.signal.aborted) log.error("SSE-Empfang beendet.", { error: String(err) });
