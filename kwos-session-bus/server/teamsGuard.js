@@ -5,13 +5,16 @@
 // writing to a person. The system prompt said otherwise, but it is read at session start,
 // and this tool was picked an hour later.
 //
-// A NUDGE, NOT A GATE (Steffen, 2026-10-29: "wir wollen ja nicht stoppen. das fuer teams
-// soll ja verfuegbar sein. wir wollen doch lediglich drauf aufmerksam machen, dass das
-// andere vielleicht besser ist"). So this is PostToolUse with `additionalContext`: the send
-// goes through, the message is delivered, and the model is told -- at the moment it just
-// used the tool -- which way the next one should take. A `deny` here would have made Teams
-// unreachable for the external recipient and the announcement, which are the person's own
-// acts.
+// A HINT BEFORE THE CALL, NOT A GATE AND NOT A REPRIMAND (Steffen, 2026-10-29: "wir muessen
+// einen weg finden vorher drauf hinzuweisen dass das tool das falsche ist … so eine info
+// hinterher im sinne von 'du dummi das war falsch' das brauchen wir nicht"). Teams stays
+// available -- for a human outside the collaboration it is the right tool.
+//
+// MEASURED, NOT ASSUMED (2026-10-29, client 2.1.312): a PreToolUse hook may return
+// `hookSpecificOutput.additionalContext` WITHOUT any `permissionDecision`. The client's own
+// schema carries the field beside `permissionDecision`/`updatedInput`, and a probe session
+// read the injected marker and still performed the tool call. That is the one shape that
+// talks to the model BEFORE the call and decides nothing.
 //
 // WHY IN THIS PLUGIN. The channel exists exactly where this plugin runs -- every session
 // except the direct path. A session without the channel is never told to use it.
@@ -23,26 +26,27 @@
 export const MS365_SEND = /^mcp__ms365__(send-chat-message|send-channel-message)$/;
 
 /**
- * What the model reads right after such a send.
+ * What the model reads right before such a send.
  *
- * It says the message is out (no illusion about undoing it), names the way for the next one,
- * and leaves the human's own use untouched -- an external recipient is a Teams message, and
- * that is not this hook's business.
+ * It names the better way for an update to another person or their agent, and it says in the
+ * same breath when Teams IS right -- otherwise the hint would push an announcement or a
+ * message to a customer away from the tool that belongs to it.
  */
-export const NOTE =
-  "Fuer ein Update an eine andere Person oder deren Agenten ist der Kanal der bessere Weg " +
-  "(collab_send): dort liest auch ihr Agent mit, hier nicht. Diese Zeile ist raus -- beim " +
-  "naechsten Mal in den Kanal; geht es an einen Menschen ausserhalb der Zusammenarbeit " +
-  "(externer Empfaenger, Ankuendigung), bleibt Teams richtig.";
+export const HINT =
+  "Hinweis vor dem Senden: fuer ein Update an eine andere Person oder deren Agenten ist der " +
+  "kwcollab-Kanal der bessere Weg (collab_send) -- dort liest auch ihr Agent mit, in einer " +
+  "Teams-Nachricht nicht. Geht es an einen Menschen ausserhalb der Zusammenarbeit (externer " +
+  "Empfaenger, Ankuendigung, Zustellnachweis), ist Teams richtig; dann sende wie geplant.";
 
 /**
  * What the hook prints for one event, or `null` (nothing to say).
  *
  * `event` is the hook name in lower case, the spelling `hooks.json` passes on the command line.
+ * No `permissionDecision` is ever returned: the call always goes through.
  */
 export function hookAnswer(event, payload) {
-  if (event !== "posttooluse") return null;
+  if (event !== "pretooluse") return null;
   const name = typeof payload?.tool_name === "string" ? payload.tool_name : "";
   if (!MS365_SEND.test(name)) return null;
-  return { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: NOTE } };
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: HINT } };
 }
