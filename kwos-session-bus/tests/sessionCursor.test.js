@@ -25,10 +25,13 @@ function withDir(fn) {
   }
 }
 
+// Built with `join`, not as a POSIX literal: on Windows the separator is a backslash, and the suite
+// runs on the Windows dev boxes too (measured 2026-10-29 -- the literal made the only red test here).
 test("the path defaults to the kraftwerk config dir and honours both overrides", () => {
-  assert.equal(sessionCursorsPath({ HOME: "/home/x" }), "/home/x/.config/kraftwerk/" + SESSION_CURSOR_FILE);
-  assert.equal(sessionCursorsPath({ HOME: "/home/x", KWOS_CLAUDE_CFG: "/cfg" }), "/cfg/" + SESSION_CURSOR_FILE);
-  assert.equal(sessionCursorsPath({ HOME: "/home/x", KWOS_RELAY_CURSORS: "/tmp/c.json" }), "/tmp/c.json");
+  const home = "/home/x";
+  assert.equal(sessionCursorsPath({ HOME: home }), join(home, ".config", "kraftwerk", SESSION_CURSOR_FILE));
+  assert.equal(sessionCursorsPath({ HOME: home, KWOS_CLAUDE_CFG: "/cfg" }), join("/cfg", SESSION_CURSOR_FILE));
+  assert.equal(sessionCursorsPath({ HOME: home, KWOS_RELAY_CURSORS: "/tmp/c.json" }), "/tmp/c.json");
 });
 
 test("nothing seen yet is null, not zero", withDir((path) => {
