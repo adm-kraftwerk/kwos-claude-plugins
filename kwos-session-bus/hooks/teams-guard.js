@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-// The hook entry for `server/teamsGuard.js` (WI 11569154): one event per run, either
-// `userpromptsubmit` (the reminder before every prompt) or `pretooluse` (the refusal of a
-// Teams send). The answers are pure and tested there; this file only does the I/O.
+// The hook entry for `server/teamsGuard.js` (WI 11569154): `posttooluse` on the two ms365 send
+// tools. The answer is pure and tested there; this file only does the I/O.
 //
-// NEVER COSTS THE PROMPT. An unreadable payload, a broken import, anything: exit 0 with
-// what we have. A guard that fails loud on every prompt would be the next defect.
+// NEVER COSTS A TURN. An unreadable payload, a broken import, anything: exit 0 with what we
+// have. A nudge that fails loud would be the next defect.
 
 import { hookAnswer } from "../server/teamsGuard.js";
 
@@ -15,7 +14,6 @@ async function main() {
     const raw = await readStdin();
     if (raw.trim() !== "") payload = JSON.parse(raw);
   } catch {
-    // No payload: the reminder still applies, and there is no tool call to judge.
     payload = {};
   }
   const answer = hookAnswer(event, payload);

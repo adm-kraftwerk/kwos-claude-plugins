@@ -1,30 +1,31 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { DENIAL, MS365_SEND, hookAnswer } from "../server/teamsGuard.js";
+import { MS365_SEND, NOTE, hookAnswer } from "../server/teamsGuard.js";
 
 // Where a message for another person goes (WI 11569154, measured 2026-10-29).
 //
-// The defect was not a missing rule -- the system prompt had one -- but that it was read at
-// session start and the tool was picked an hour later. This hook sits at the tool itself:
-// `permissionDecision: "deny"` STOPPED the call, and the reason reaches the model.
+// A NUDGE, NOT A GATE (Steffen, 2026-10-29): Teams stays available, above all for a message to
+// a HUMAN (external recipient, announcement). So the hook does not decide -- it notes, after
+// the send, which way the next one should take. `additionalContext` reaches the model; no
+// permissionDecision is ever returned.
 
-test("a Teams send is refused, and the refusal names the way that works", () => {
-  const answer = hookAnswer("pretooluse", { tool_name: "mcp__ms365__send-chat-message" });
-  assert.equal(answer?.hookSpecificOutput.permissionDecision, "deny");
-  const reason = answer?.hookSpecificOutput.permissionDecisionReason;
-  assert.equal(reason, DENIAL);
-  // The sentence the user asked for: people in the collab are reached through the collab tools.
-  assert.match(reason, /Personen im Collab erreichst du ueber die collab-Werkzeuge/);
-  assert.match(reason, /collab_send/);
-  // And the one case that stays the person's: a real message to a HUMAN.
-  assert.match(reason, /frag deinen Nutzer/);
+test("after a Teams send the model reads where the next one belongs", () => {
+  const answer = hookAnswer("posttooluse", { tool_name: "mcp__ms365__send-chat-message" });
+  assert.equal(answer?.hookSpecificOutput.hookEventName, "PostToolUse");
+  assert.equal(answer?.hookSpecificOutput.additionalContext, NOTE);
+  // No decision at all: the call already happened and nothing may be blocked.
+  assert.equal(answer?.hookSpecificOutput.permissionDecision, undefined);
+  // The three claims that make the note useful.
+  assert.match(NOTE, /collab_send/);
+  assert.match(NOTE, /Diese Zeile ist raus/);
+  assert.match(NOTE, /bleibt Teams richtig/);
 });
 
 test("both ms365 send tools are covered, and nothing else is touched", () => {
   for (const name of ["mcp__ms365__send-chat-message", "mcp__ms365__send-channel-message"]) {
     assert.ok(MS365_SEND.test(name), name);
-    assert.equal(hookAnswer("pretooluse", { tool_name: name })?.hookSpecificOutput.permissionDecision, "deny", name);
+    assert.equal(hookAnswer("posttooluse", { tool_name: name })?.hookSpecificOutput.additionalContext, NOTE, name);
   }
   for (const name of [
     "mcp__ms365__list-chats",
@@ -33,13 +34,16 @@ test("both ms365 send tools are covered, and nothing else is touched", () => {
     "Bash",
     "",
   ]) {
-    assert.equal(hookAnswer("pretooluse", { tool_name: name }), null, name);
+    assert.equal(hookAnswer("posttooluse", { tool_name: name }), null, name);
   }
-  assert.equal(hookAnswer("pretooluse", { tool_name: null }), null);
-  assert.equal(hookAnswer("pretooluse", {}), null);
+  assert.equal(hookAnswer("posttooluse", { tool_name: null }), null);
+  assert.equal(hookAnswer("posttooluse", {}), null);
 });
 
-test("no other event carries a judgement -- the guard has one job", () => {
+test("no other event carries an answer -- and in particular no PreToolUse decision", () => {
+  // The old shape was a `deny` at PreToolUse. It must not come back by accident: Teams is the
+  // right tool for a message to a human, and a gate would have made it unreachable.
+  assert.equal(hookAnswer("pretooluse", { tool_name: "mcp__ms365__send-chat-message" }), null);
   assert.equal(hookAnswer("userpromptsubmit", {}), null);
   assert.equal(hookAnswer("sessionstart", {}), null);
   assert.equal(hookAnswer("", {}), null);

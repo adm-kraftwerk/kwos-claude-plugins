@@ -37,14 +37,16 @@
             "timeout": 15
           }
         ]
-      },
+      }
+    ],
+    "PostToolUse": [
       {
         "matcher": "mcp__ms365__send-chat-message|mcp__ms365__send-channel-message",
         "hooks": [
           {
             "type": "command",
             "shell": "bash",
-            "command": "cd \"$HOME\" 2>/dev/null || cd /; node \"${CLAUDE_PLUGIN_ROOT}/hooks/teams-guard.js\" pretooluse",
+            "command": "cd \"$HOME\" 2>/dev/null || cd /; node \"${CLAUDE_PLUGIN_ROOT}/hooks/teams-guard.js\" posttooluse",
             "timeout": 5
           }
         ]
