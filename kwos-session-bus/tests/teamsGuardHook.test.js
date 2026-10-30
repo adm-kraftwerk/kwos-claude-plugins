@@ -13,7 +13,11 @@ const PAYLOAD = JSON.stringify({ session_id: "sess-hook-test", tool_name: "mcp__
 
 /** A relay socket that ACCEPTS and then says nothing -- the case a plain timeout does not cover. */
 async function hangingRelay() {
-  const server = createServer(() => { /* accept, never answer */ });
+  // The accepted socket gets an error handler of its own: the hook hangs up at its budget, and
+  // Windows reports that as ECONNRESET on THIS side. Unhandled, it took the whole test process
+  // down (measured 2026-10-30: green on Linux, this one red on the Windows dev boxes).
+  const server = createServer((socket) => { socket.on("error", () => {}); });
+  server.on("error", () => {});
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
   // NOT awaited on close: the accepted socket of the hook may outlive the test by a moment, and

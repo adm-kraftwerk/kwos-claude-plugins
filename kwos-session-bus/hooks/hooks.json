@@ -39,7 +39,7 @@
         ]
       },
       {
-        "matcher": "mcp__ms365__send-chat-message|mcp__ms365__send-channel-message",
+        "matcher": "mcp__(plugin_[a-z0-9-]+_)?ms365__send-(chat|channel)-message",
         "hooks": [
           {
             "type": "command",

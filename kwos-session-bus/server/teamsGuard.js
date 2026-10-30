@@ -22,8 +22,20 @@
 // Pure on purpose: the answer is text, and its test needs no harness
 // (`tests/teamsGuard.test.js`).
 
-/** The two ms365 tools that write to a chat or a channel. */
-export const MS365_SEND = /^mcp__ms365__(send-chat-message|send-channel-message)$/;
+/**
+ * The two ms365 tools that write to a chat or a channel.
+ *
+ * THE NAME HAS A PLUGIN SEGMENT IN THE FLEET (measured 2026-10-30, client 2.1.312): the ms365
+ * server is declared in `kraftwerkos/.mcp.json`, so the tool is
+ * `mcp__plugin_kraftwerkos_ms365__send-chat-message`, not `mcp__ms365__...` -- the client scopes
+ * a plugin-bundled MCP server's segment by plugin name, and a matcher written against the bare
+ * server key never fires (hooks docs, "Match MCP tools"). The first version of this file used
+ * the bare form, which would have made the whole hook silent.
+ *
+ * The bare form stays valid: a user-scope or project-scope `ms365` server keeps it, and both
+ * spellings mean the same tool.
+ */
+export const MS365_SEND = /^mcp__(?:plugin_[a-z0-9-]+_)?ms365__(?:send-chat-message|send-channel-message)$/;
 
 /**
  * What the model reads right before such a send.
