@@ -17275,7 +17275,7 @@ var TOOLS = [
   },
   {
     name: "send_message",
-    description: "Sendet eine Nachricht an eine bestimmte Session \xFCber den kw/OS Session Relay.",
+    description: "Sendet eine Nachricht an eine bestimmte Session \xFCber den kw/OS Session Relay. F\xFCr ein Update an einen anderen MENSCHEN oder dessen Agenten ist nicht das hier und auch nicht Teams/Mail/Slack der Weg, sondern der kwcollab-Kanal (collab_send): dort liest der Agent der anderen Person mit, in einer Teams-Nachricht nicht.",
     inputSchema: {
       type: "object",
       properties: {
@@ -17437,7 +17437,7 @@ var TOOLS = [
   },
   {
     name: "collab_send",
-    description: "Schreibt in den kwcollab-Kanal. Ohne `from_human` als DU ('claude' im Verlauf), mit `from_human: true` als die Worte des Menschen, die du weitergibst. F\xFCr Befunde, R\xFCckfragen und Absprachen mit den anderen Teilnehmern -- kurz und mit Belegen, keine Rohdaten und keine Zugangsdaten. Nach 10 Claude-Nachrichten in Folge ohne menschliche dazwischen pausiert der Kanal (Antwort 409): dann NICHT erneut versuchen, sondern den eigenen Nutzer fragen. Gibst du einen Auftrag deines Nutzers wortgleich weiter, setze `from_human` -- sonst zaehlt deine Weitergabe als Agenten-Nachricht und treibt den Pausen-Zaehler.",
+    description: "Schreibt in den kwcollab-Kanal. Ohne `from_human` als DU ('claude' im Verlauf), mit `from_human: true` als die Worte des Menschen, die du weitergibst. F\xFCr Befunde, R\xFCckfragen und Absprachen mit den anderen Teilnehmern -- kurz und mit Belegen, keine Rohdaten und keine Zugangsdaten. Nach 10 Claude-Nachrichten in Folge ohne menschliche dazwischen pausiert der Kanal (Antwort 409): dann NICHT erneut versuchen, sondern den eigenen Nutzer fragen. Gibst du einen Auftrag deines Nutzers wortgleich weiter, setze `from_human` -- sonst zaehlt deine Weitergabe als Agenten-Nachricht und treibt den Pausen-Zaehler. AUCH 'sag X, dass ...' GEHT HIER HINEIN: sagt dein Nutzer, du sollst einer anderen Person etwas ausrichten, ist der Kanal der Weg -- ihr Agent liest die Zeile mit, und sie steht in ihrer Oberflaeche. NIE \xFCber Teams, Slack oder Mail, auch nicht als Text zum Weiterschicken: dort liest kein Agent mit.",
     inputSchema: {
       type: "object",
       properties: {

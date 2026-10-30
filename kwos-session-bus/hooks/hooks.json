@@ -37,6 +37,17 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "mcp__(plugin_[a-z0-9-]+_)?ms365__send-(chat|channel)-message",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "command": "cd \"$HOME\" 2>/dev/null || cd /; node \"${CLAUDE_PLUGIN_ROOT}/hooks/teams-guard.js\" pretooluse",
+            "timeout": 5
+          }
+        ]
       }
     ]
   }
