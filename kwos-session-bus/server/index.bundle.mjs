@@ -15517,6 +15517,11 @@ var DEFAULT_TOKEN_HELPER_PATH = join(
 );
 var TOKEN_HELPER_PATH = process.env.KWOS_XID_TOKEN_HELPER_PATH || DEFAULT_TOKEN_HELPER_PATH;
 var TOKEN_OVERRIDE = process.env.KWOS_XID_ACCESS_TOKEN;
+var ACCESS_CACHE_PATH = process.env.KWOS_XID_ACCESS_CACHE || join(
+  platform() === "win32" ? process.env.LOCALAPPDATA || join(homedir(), ".config") : join(homedir(), ".config"),
+  "kraftwerk",
+  "xiam-access"
+);
 function readProcessCwd() {
   try {
     return process.cwd();
@@ -15599,6 +15604,8 @@ var config2 = {
   relayUrl: RELAY_URL ? RELAY_URL.replace(/\/$/, "") : void 0,
   tokenHelperPath: TOKEN_HELPER_PATH,
   tokenOverride: TOKEN_OVERRIDE,
+  /** The helper's own access-token cache -- read before ever spawning the helper (s. auth.js). */
+  accessCachePath: ACCESS_CACHE_PATH,
   sessionId: void 0,
   /**
    * TRUE when `sessionId` was INVENTED by this process (no marker, no environment value -- see
@@ -15674,10 +15681,24 @@ function isMainModule(moduleUrl, { argv = process.argv, resolve = realpathSync.n
 
 // server/auth.js
 import { spawn } from "node:child_process";
-import { existsSync as existsSync2 } from "node:fs";
+import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
 import { platform as platform2 } from "node:os";
 var HELPER_TIMEOUT_MS = 2e4;
 var XID_ISSUER = process.env.XIAM_ISSUER || "https://xid.supinfo.de";
+var CACHE_MARGIN_MS = 6e4;
+function cachedAccessToken() {
+  try {
+    const raw = readFileSync2(config2.accessCachePath, "utf8").replace(/^﻿/, "");
+    const nl = raw.indexOf("\n");
+    if (nl < 0) return null;
+    const expires = Number(raw.slice(0, nl));
+    const token = raw.slice(nl + 1).trim();
+    if (!token || !Number.isFinite(expires)) return null;
+    return Date.now() < expires * 1e3 - CACHE_MARGIN_MS ? token : null;
+  } catch {
+    return null;
+  }
+}
 function runHelper() {
   return new Promise((resolve, reject) => {
     const isWin = platform2() === "win32";
@@ -15758,6 +15779,11 @@ function probeShellEnv(env) {
 var cachedToken;
 async function getAccessToken() {
   if (config2.tokenOverride) return config2.tokenOverride;
+  const shared = cachedAccessToken();
+  if (shared) {
+    cachedToken = shared;
+    return shared;
+  }
   if (!existsSync2(config2.tokenHelperPath)) {
     if (cachedToken) return cachedToken;
     throw new Error(
@@ -15967,7 +15993,7 @@ function rememberOwnHumanLine(seq) {
 
 // server/codeGit.js
 import { spawn as spawn2 } from "node:child_process";
-import { mkdirSync, existsSync as existsSync3, readFileSync as readFileSync2, writeFileSync, renameSync, statSync } from "node:fs";
+import { mkdirSync, existsSync as existsSync3, readFileSync as readFileSync3, writeFileSync, renameSync, statSync } from "node:fs";
 import { join as join2, isAbsolute } from "node:path";
 var GIT_MIN = [2, 40];
 var NUL = "\0";
@@ -16064,7 +16090,7 @@ function stateDir(gitDir) {
 var statePath = (gitDir) => join2(stateDir(gitDir), "state.json");
 function readState(gitDir) {
   try {
-    return JSON.parse(readFileSync2(statePath(gitDir), "utf8"));
+    return JSON.parse(readFileSync3(statePath(gitDir), "utf8"));
   } catch {
     return null;
   }
@@ -16253,7 +16279,7 @@ async function filesWithMarkers(top, paths) {
     const full = isAbsolute(p) ? p : join2(top, p);
     let text2 = "";
     try {
-      text2 = readFileSync2(full, "utf8");
+      text2 = readFileSync3(full, "utf8");
     } catch {
       continue;
     }
