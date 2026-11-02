@@ -1,11 +1,39 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { platform } from "node:os";
 import { config } from "./config.js";
 import { log } from "./log.js";
 
 const HELPER_TIMEOUT_MS = 20_000;
 const XID_ISSUER = process.env.XIAM_ISSUER || "https://xid.supinfo.de";
+// The same safety margin the helper uses (`MARGIN_SEC`): a token that dies within the next minute
+// counts as gone, so a request never starts on one that expires while it runs.
+const CACHE_MARGIN_MS = 60_000;
+
+/**
+ * The access token the HELPER already fetched, straight from its shared cache (2026-11-02).
+ *
+ * WHY THIS EXISTS: `getAccessToken` is called PER REQUEST (relay-client's fetch, codeServe), and
+ * every call used to spawn `xiam-token.sh` -- bash plus a python interpreter whose only work was
+ * to read a file and print one line. In a session that is dozens of subprocesses a minute, on the
+ * path the relay hooks wait for. The helper writes `xiam-access` (`expiry` in epoch seconds, then
+ * the token) for exactly this reuse, so this reads it and leaves the spawn to the cache miss.
+ *
+ * A stale or unreadable file is not an error -- it is a cache miss, and the helper answers.
+ */
+function cachedAccessToken() {
+  try {
+    const raw = readFileSync(config.accessCachePath, "utf8").replace(/^﻿/, "");
+    const nl = raw.indexOf("\n");
+    if (nl < 0) return null;
+    const expires = Number(raw.slice(0, nl));
+    const token = raw.slice(nl + 1).trim();
+    if (!token || !Number.isFinite(expires)) return null;
+    return Date.now() < expires * 1000 - CACHE_MARGIN_MS ? token : null;
+  } catch {
+    return null;
+  }
+}
 
 // XIAM_REFRESH_ONLY=1 macht den Helper strikt non-interaktiv: kein Browser, kein Warten auf
 // Eingabe, sofortiger Fehlschlag ohne gueltigen Refresh-Token-Cache. Ohne diesen Schalter wuerde
@@ -104,6 +132,15 @@ let cachedToken;
  */
 export async function getAccessToken() {
   if (config.tokenOverride) return config.tokenOverride;
+
+  // THE FILE BEFORE THE PROCESS (2026-11-02): a token the helper already fetched is one read
+  // away, and this function runs on every relay request. The helper is the miss path, not the
+  // default one.
+  const shared = cachedAccessToken();
+  if (shared) {
+    cachedToken = shared;
+    return shared;
+  }
 
   if (!existsSync(config.tokenHelperPath)) {
     if (cachedToken) return cachedToken;
