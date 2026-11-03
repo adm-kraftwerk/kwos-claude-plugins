@@ -30,6 +30,19 @@ const DEFAULT_TOKEN_HELPER_PATH = join(
 const TOKEN_HELPER_PATH = process.env.KWOS_XID_TOKEN_HELPER_PATH || DEFAULT_TOKEN_HELPER_PATH;
 const TOKEN_OVERRIDE = process.env.KWOS_XID_ACCESS_TOKEN;
 
+// THE TOKEN THE HELPER ALREADY FETCHED (2026-11-02). The helper writes the access token with its
+// expiry beside itself (`xiam-access`: first line `expiry` in epoch seconds, second line the
+// token). Reading that file costs one read; ASKING the helper costs a bash/python process PER
+// RELAY REQUEST (relay-client fetch, codeServe, ...). Same file and same two lines as
+// `scripts/xiam-token.sh`; its PowerShell twin puts it under %LOCALAPPDATA% instead.
+const ACCESS_CACHE_PATH =
+  process.env.KWOS_XID_ACCESS_CACHE ||
+  join(
+    platform() === "win32" ? process.env.LOCALAPPDATA || join(homedir(), ".config") : join(homedir(), ".config"),
+    "kraftwerk",
+    "xiam-access"
+  );
+
 // Claude-Code-Session-ID -- CORRECTED 2026-10-14 (measured on a live session):
 //
 // 1. `CLAUDE_CODE_SESSION_ID` IS in the environment of a process started the way the MCP server or
@@ -189,6 +202,8 @@ export const config = {
   relayUrl: RELAY_URL ? RELAY_URL.replace(/\/$/, "") : undefined,
   tokenHelperPath: TOKEN_HELPER_PATH,
   tokenOverride: TOKEN_OVERRIDE,
+  /** The helper's own access-token cache -- read before ever spawning the helper (s. auth.js). */
+  accessCachePath: ACCESS_CACHE_PATH,
   sessionId: undefined,
   /**
    * TRUE when `sessionId` was INVENTED by this process (no marker, no environment value -- see
