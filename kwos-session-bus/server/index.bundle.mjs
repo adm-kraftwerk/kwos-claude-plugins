@@ -15484,7 +15484,7 @@ var StdioServerTransport = class {
 import { randomUUID } from "node:crypto";
 import { homedir, platform } from "node:os";
 import { existsSync, readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, delimiter } from "node:path";
 
 // server/log.js
 function write(level, message, extra) {
@@ -15517,11 +15517,14 @@ var DEFAULT_TOKEN_HELPER_PATH = join(
 );
 var TOKEN_HELPER_PATH = process.env.KWOS_XID_TOKEN_HELPER_PATH || DEFAULT_TOKEN_HELPER_PATH;
 var TOKEN_OVERRIDE = process.env.KWOS_XID_ACCESS_TOKEN;
-var ACCESS_CACHE_PATH = process.env.KWOS_XID_ACCESS_CACHE || join(
-  platform() === "win32" ? process.env.LOCALAPPDATA || join(homedir(), ".config") : join(homedir(), ".config"),
+var HOME_ACCESS_CACHE = join(homedir(), ".config", "kraftwerk", "xiam-access");
+var LOCAL_ACCESS_CACHE = join(
+  process.env.LOCALAPPDATA || join(homedir(), ".config"),
   "kraftwerk",
   "xiam-access"
 );
+var ACCESS_CACHE_OVERRIDE = process.env.KWOS_XID_ACCESS_CACHE;
+var ACCESS_CACHE_PATHS = ACCESS_CACHE_OVERRIDE ? ACCESS_CACHE_OVERRIDE.split(delimiter).filter((p) => p !== "") : platform() === "win32" ? [LOCAL_ACCESS_CACHE, HOME_ACCESS_CACHE] : [HOME_ACCESS_CACHE];
 function readProcessCwd() {
   try {
     return process.cwd();
@@ -15604,8 +15607,10 @@ var config2 = {
   relayUrl: RELAY_URL ? RELAY_URL.replace(/\/$/, "") : void 0,
   tokenHelperPath: TOKEN_HELPER_PATH,
   tokenOverride: TOKEN_OVERRIDE,
-  /** The helper's own access-token cache -- read before ever spawning the helper (s. auth.js). */
-  accessCachePath: ACCESS_CACHE_PATH,
+  /** Every place the helper's access-token cache can be -- read before ever spawning it (s. auth.js). */
+  accessCachePaths: ACCESS_CACHE_PATHS,
+  /** The first of them, for callers that only ever wanted one path. */
+  accessCachePath: ACCESS_CACHE_PATHS[0],
   sessionId: void 0,
   /**
    * TRUE when `sessionId` was INVENTED by this process (no marker, no environment value -- see
@@ -15687,8 +15692,15 @@ var HELPER_TIMEOUT_MS = 2e4;
 var XID_ISSUER = process.env.XIAM_ISSUER || "https://xid.supinfo.de";
 var CACHE_MARGIN_MS = 6e4;
 function cachedAccessToken() {
+  for (const path of config2.accessCachePaths) {
+    const token = readCacheEntry(path);
+    if (token) return token;
+  }
+  return null;
+}
+function readCacheEntry(path) {
   try {
-    const raw = readFileSync2(config2.accessCachePath, "utf8").replace(/^﻿/, "");
+    const raw = readFileSync2(path, "utf8").replace(/^﻿/, "");
     const nl = raw.indexOf("\n");
     if (nl < 0) return null;
     const expires = Number(raw.slice(0, nl));

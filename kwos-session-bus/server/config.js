@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { homedir, platform } from "node:os";
 import { existsSync, readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, delimiter } from "node:path";
 import { log } from "./log.js";
 import { MARKER_DIR, LEGACY_MARKER_FILE, clientMarkerName } from "./sessionMarker.js";
 
@@ -35,13 +35,26 @@ const TOKEN_OVERRIDE = process.env.KWOS_XID_ACCESS_TOKEN;
 // token). Reading that file costs one read; ASKING the helper costs a bash/python process PER
 // RELAY REQUEST (relay-client fetch, codeServe, ...). Same file and same two lines as
 // `scripts/xiam-token.sh`; its PowerShell twin puts it under %LOCALAPPDATA% instead.
-const ACCESS_CACHE_PATH =
-  process.env.KWOS_XID_ACCESS_CACHE ||
-  join(
-    platform() === "win32" ? process.env.LOCALAPPDATA || join(homedir(), ".config") : join(homedir(), ".config"),
-    "kraftwerk",
-    "xiam-access"
-  );
+//
+// TWO PLACES ON WINDOWS, ONE ON POSIX (2026-11-03, measured on the specimen: both files exist
+// there at the same time). The helper this service SPAWNS is the .ps1 one, and it writes under
+// %LOCALAPPDATA% -- that is the first path. But a client can also reach the same identity through
+// the BASH helper (Git Bash, WSL), and that one writes `~/.config/kraftwerk/xiam-access`; reading
+// only %LOCALAPPDATA% would miss a perfectly good token and spawn a process for it. Same file
+// name, two directories, so both are tried in order. An override may name several paths,
+// separated by the platform's path delimiter.
+const HOME_ACCESS_CACHE = join(homedir(), ".config", "kraftwerk", "xiam-access");
+const LOCAL_ACCESS_CACHE = join(
+  process.env.LOCALAPPDATA || join(homedir(), ".config"),
+  "kraftwerk",
+  "xiam-access"
+);
+const ACCESS_CACHE_OVERRIDE = process.env.KWOS_XID_ACCESS_CACHE;
+const ACCESS_CACHE_PATHS = ACCESS_CACHE_OVERRIDE
+  ? ACCESS_CACHE_OVERRIDE.split(delimiter).filter((p) => p !== "")
+  : platform() === "win32"
+    ? [LOCAL_ACCESS_CACHE, HOME_ACCESS_CACHE]
+    : [HOME_ACCESS_CACHE];
 
 // Claude-Code-Session-ID -- CORRECTED 2026-10-14 (measured on a live session):
 //
@@ -202,8 +215,10 @@ export const config = {
   relayUrl: RELAY_URL ? RELAY_URL.replace(/\/$/, "") : undefined,
   tokenHelperPath: TOKEN_HELPER_PATH,
   tokenOverride: TOKEN_OVERRIDE,
-  /** The helper's own access-token cache -- read before ever spawning the helper (s. auth.js). */
-  accessCachePath: ACCESS_CACHE_PATH,
+  /** Every place the helper's access-token cache can be -- read before ever spawning it (s. auth.js). */
+  accessCachePaths: ACCESS_CACHE_PATHS,
+  /** The first of them, for callers that only ever wanted one path. */
+  accessCachePath: ACCESS_CACHE_PATHS[0],
   sessionId: undefined,
   /**
    * TRUE when `sessionId` was INVENTED by this process (no marker, no environment value -- see
