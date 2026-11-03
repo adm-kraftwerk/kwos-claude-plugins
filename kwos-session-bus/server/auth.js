@@ -20,10 +20,22 @@ const CACHE_MARGIN_MS = 60_000;
  * the token) for exactly this reuse, so this reads it and leaves the spawn to the cache miss.
  *
  * A stale or unreadable file is not an error -- it is a cache miss, and the helper answers.
+ *
+ * EVERY path is tried (2026-11-03): on Windows the bash and the PowerShell helpers write the same
+ * file name into two directories, and a client may have reached this identity through either of
+ * them. The first entry that yields a usable token wins; nothing is written.
  */
 function cachedAccessToken() {
+  for (const path of config.accessCachePaths) {
+    const token = readCacheEntry(path);
+    if (token) return token;
+  }
+  return null;
+}
+
+function readCacheEntry(path) {
   try {
-    const raw = readFileSync(config.accessCachePath, "utf8").replace(/^﻿/, "");
+    const raw = readFileSync(path, "utf8").replace(/^﻿/, "");
     const nl = raw.indexOf("\n");
     if (nl < 0) return null;
     const expires = Number(raw.slice(0, nl));
