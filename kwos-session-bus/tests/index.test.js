@@ -225,6 +225,20 @@ test("collab_send bietet die Kurzform an -- und verlangt sie nicht (WI 11538037)
   assert.match(tool.inputSchema.properties.summary.description, /280/);
 });
 
+test("collab_send bietet die semantischen Felder an -- und verlangt keines (WI 11600876)", () => {
+  const tool = TOOLS.find((t) => t.name === "collab_send");
+  assert.ok(tool, "collab_send fehlt in TOOLS");
+  assert.equal(tool.inputSchema.properties.class.type, "string");
+  assert.deepEqual(tool.inputSchema.properties.class.enum,
+    ["routine", "progress", "discussion", "finding", "decision", "question"]);
+  assert.deepEqual(tool.inputSchema.properties.severity.enum, ["normal", "warning", "critical"]);
+  assert.equal(tool.inputSchema.properties.requires_human.type, "boolean");
+  assert.equal(tool.inputSchema.properties.targets.type, "array");
+  // Ein Pflichtfeld waere ein Bruch: eine Zeile ohne Klasse ist sichtbar, und ein Agent, der die
+  // Klasse vergisst, soll nicht am Schema scheitern.
+  assert.deepEqual(tool.inputSchema.required, ["text"]);
+});
+
 test("collab_send schreibt ohne from_human als 'claude' und mit ihm als 'human'", async () => {
   // Der Pausen-Zaehler zaehlt Agenten-Nachrichten in Folge. Wer die Worte seines Nutzers wortgleich
   // weitergibt, ist der MENSCH, der spricht -- `from_human` sagt das dem Relay. Der Test geht an

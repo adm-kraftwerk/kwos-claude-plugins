@@ -16442,7 +16442,21 @@ function clampSummary(value, max = SUMMARY_MAX) {
   const space = cut.lastIndexOf(" ");
   return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}\u2026`;
 }
-async function sendCollabMessage(collabId, text2, attachmentId = null, fromHuman = false, summary = null) {
+var MESSAGE_CLASSES = ["routine", "progress", "discussion", "finding", "decision", "question"];
+var MESSAGE_SEVERITIES = ["normal", "warning", "critical"];
+var TARGETS_MAX = 32;
+function classificationOf(meta2 = {}) {
+  const cls = MESSAGE_CLASSES.includes(meta2.class) ? meta2.class : null;
+  const sev = MESSAGE_SEVERITIES.includes(meta2.severity) ? meta2.severity : null;
+  const targets = Array.isArray(meta2.targets) ? meta2.targets.filter((x) => typeof x === "string" && x.length > 0 && x.length <= 200).slice(0, TARGETS_MAX) : [];
+  return {
+    ...cls !== null ? { class: cls } : {},
+    ...sev !== null ? { severity: sev } : {},
+    ...meta2.requires_human === true ? { requires_human: true } : {},
+    ...targets.length > 0 ? { targets } : {}
+  };
+}
+async function sendCollabMessage(collabId, text2, attachmentId = null, fromHuman = false, summary = null, meta2 = {}) {
   const brief = clampSummary(summary);
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages`, {
     method: "POST",
@@ -16451,7 +16465,8 @@ async function sendCollabMessage(collabId, text2, attachmentId = null, fromHuman
       author_kind: fromHuman ? "human" : "claude",
       session_id: config2.sessionId,
       ...attachmentId ? { attachment_id: attachmentId } : {},
-      ...brief !== null ? { summary: brief } : {}
+      ...brief !== null ? { summary: brief } : {},
+      ...classificationOf(meta2)
     }
   });
   if (fromHuman) rememberOwnHumanLine(data?.message?.seq);
@@ -17492,6 +17507,29 @@ var TOOLS = [
         attachment_id: {
           type: "string",
           description: "Optional: UUID eines vorher hochgeladenen Anhangs (eigener Upload n\xF6tig)"
+        },
+        // WHAT THE LINE IS ABOUT (WI 11600876). Read by the surfaces' focus mode: routine,
+        // progress and discussion may be folded, everything else stays visible. A wrong class is
+        // worse than none -- omitted means visible.
+        class: {
+          type: "string",
+          enum: ["routine", "progress", "discussion", "finding", "decision", "question"],
+          description: "Was die Zeile ist. `finding`: neuer, belegter Befund. `progress`: laufende Arbeit, Zwischenstand. `routine`: nichts Neues (Bestaetigung, Wiederholung). `discussion`: Erwaegung, Hypothese, Frage an einen anderen Agenten. `question`: ein MENSCH muss antworten (dann `requires_human: true`). `decision`: nur wenn ein Mensch entschieden hat -- dein eigener Vorschlag ist `discussion`, eine Weitergabe `finding`; der Relay weist `decision` von einer Maschine mit 403 ab."
+        },
+        severity: {
+          type: "string",
+          enum: ["normal", "warning", "critical"],
+          description: "Dringlichkeit, unabhaengig von der Klasse. `warning`/`critical` bleiben immer sichtbar; setze sie sparsam -- eine Zeile, die warnt, muss eine Warnung sein."
+        },
+        requires_human: {
+          type: "boolean",
+          description: "True nur, wenn ein MENSCH handeln muss (Freigabe, Entscheidung, Antwort). Eine Frage an einen anderen Agenten ist keine menschliche Handlungsanforderung."
+        },
+        targets: {
+          type: "array",
+          items: { type: "string" },
+          maxItems: 32,
+          description: "Logins der Personen, die antworten sollen (XID-Subjekt). Eine Frage ohne Ziel bleibt sichtbar, alarmiert aber niemanden."
         }
       },
       required: ["text"],
@@ -17759,7 +17797,13 @@ async function handleToolCall(name, args = {}) {
         args.text,
         args.attachment_id ?? null,
         fromHuman,
-        args.summary ?? null
+        args.summary ?? null,
+        {
+          class: args.class,
+          severity: args.severity,
+          requires_human: args.requires_human,
+          targets: args.targets
+        }
       );
       return {
         content: [{

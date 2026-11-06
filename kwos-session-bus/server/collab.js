@@ -276,6 +276,35 @@ export function clampSummary(value, max = SUMMARY_MAX) {
 }
 
 /**
+ * WHAT THE LINE IS ABOUT (WI 11600876, "Human Attention First"), as the relay accepts it.
+ *
+ * The six classes are a closed vocabulary on both sides. An unknown value is DROPPED here rather
+ * than sent: the relay answers 400 for it, and losing a mis-typed class is a smaller loss than
+ * losing the message -- the same trade `clampSummary` makes. The relay still decides what it
+ * stores (`class_source` is its note, never ours), and it refuses `decision` from a machine
+ * credential: an agent reports decisions, it does not declare them.
+ */
+export const MESSAGE_CLASSES = ["routine", "progress", "discussion", "finding", "decision", "question"];
+export const MESSAGE_SEVERITIES = ["normal", "warning", "critical"];
+export const TARGETS_MAX = 32;
+
+export function classificationOf(meta = {}) {
+  const cls = MESSAGE_CLASSES.includes(meta.class) ? meta.class : null;
+  const sev = MESSAGE_SEVERITIES.includes(meta.severity) ? meta.severity : null;
+  const targets = Array.isArray(meta.targets)
+    ? meta.targets
+      .filter((x) => typeof x === "string" && x.length > 0 && x.length <= 200)
+      .slice(0, TARGETS_MAX)
+    : [];
+  return {
+    ...(cls !== null ? { class: cls } : {}),
+    ...(sev !== null ? { severity: sev } : {}),
+    ...(meta.requires_human === true ? { requires_human: true } : {}),
+    ...(targets.length > 0 ? { targets } : {}),
+  };
+}
+
+/**
  * POST /v1/collabs/{id}/messages -- this session speaks.
  *
  * The KIND is what the other side reads. "claude" is the agent's own sentence, "human" is the
@@ -288,7 +317,9 @@ export function clampSummary(value, max = SUMMARY_MAX) {
  * channel off the screen. It is a courtesy, not a condition -- a line without one still arrives, and
  * the surfaces then take its first sentence. An older relay ignores the field entirely.
  */
-export async function sendCollabMessage(collabId, text, attachmentId = null, fromHuman = false, summary = null) {
+export async function sendCollabMessage(
+  collabId, text, attachmentId = null, fromHuman = false, summary = null, meta = {},
+) {
   const brief = clampSummary(summary);
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages`, {
     method: "POST",
@@ -298,6 +329,7 @@ export async function sendCollabMessage(collabId, text, attachmentId = null, fro
       session_id: config.sessionId,
       ...(attachmentId ? { attachment_id: attachmentId } : {}),
       ...(brief !== null ? { summary: brief } : {}),
+      ...classificationOf(meta),
     },
   });
   // A line we relayed as the human comes back to us looking exactly like the human's own (s.
