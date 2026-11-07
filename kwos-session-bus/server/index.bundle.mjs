@@ -15829,7 +15829,7 @@ async function getAccessToken() {
 }
 
 // server/relay-client.js
-async function call(path, { method = "GET", body, headers } = {}) {
+async function call(path, { method = "GET", body, headers, timeoutMs } = {}) {
   if (!config2.relayUrl) {
     throw new Error("KWOS_RELAY_URL ist nicht gesetzt.");
   }
@@ -15841,7 +15841,8 @@ async function call(path, { method = "GET", body, headers } = {}) {
       ...body ? { "Content-Type": "application/json" } : {},
       ...headers
     },
-    body: body ? JSON.stringify(body) : void 0
+    body: body ? JSON.stringify(body) : void 0,
+    ...timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}
   });
   if (!res.ok && res.status !== 202) {
     const text2 = await res.text().catch(() => "");

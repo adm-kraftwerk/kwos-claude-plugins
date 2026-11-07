@@ -201,9 +201,21 @@ export async function startRelayListener({ writeLine } = {}) {
   let stopping = false;
   let signalEnded;
   const ended = new Promise((resolve) => { signalEnded = resolve; });
-  const stop = () => { stopping = true; controller.abort(); signalEnded(); };
+  // The row leaves the relay's list as the session ends, not when the relay ages it out. `ended`
+  // waits for the one attempt, so the process cannot exit before the request has gone out.
+  const stop = () => {
+    if (stopping) return;
+    stopping = true;
+    controller.abort();
+    relay.unregister()
+      .catch((err) => log.info("Abmeldung beim Relay nicht angekommen.", { error: String(err) }))
+      .finally(signalEnded);
+  };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+  // A closed PTY hangs the session up; without this handler the default action ends the process
+  // before the call can go out.
+  process.on("SIGHUP", stop);
 
   const out = writeLine ?? createLineWriter(process.stdout);
 
