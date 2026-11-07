@@ -234,6 +234,9 @@ test("collab_send bietet die semantischen Felder an -- und verlangt keines (WI 1
   assert.deepEqual(tool.inputSchema.properties.severity.enum, ["normal", "warning", "critical"]);
   assert.equal(tool.inputSchema.properties.requires_human.type, "boolean");
   assert.equal(tool.inputSchema.properties.targets.type, "array");
+  // Zustellung (WI 11600876) ist ein eigenes Paar Felder, kein Teil der Bedeutung.
+  assert.deepEqual(tool.inputSchema.properties.delivery.enum, ["broadcast", "targeted"]);
+  assert.equal(tool.inputSchema.properties.recipients.type, "array");
   // Ein Pflichtfeld waere ein Bruch: eine Zeile ohne Klasse ist sichtbar, und ein Agent, der die
   // Klasse vergisst, soll nicht am Schema scheitern.
   assert.deepEqual(tool.inputSchema.required, ["text"]);

@@ -16456,6 +16456,10 @@ function classificationOf(meta2 = {}) {
     ...targets.length > 0 ? { targets } : {}
   };
 }
+function normaliseRecipients(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((x) => typeof x === "string" && x.trim() !== "").map((x) => x.trim().slice(0, 200)).slice(0, 50);
+}
 async function sendCollabMessage(collabId, text2, attachmentId = null, fromHuman = false, summary = null, meta2 = {}) {
   const brief = clampSummary(summary);
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages`, {
@@ -16466,7 +16470,10 @@ async function sendCollabMessage(collabId, text2, attachmentId = null, fromHuman
       session_id: config2.sessionId,
       ...attachmentId ? { attachment_id: attachmentId } : {},
       ...brief !== null ? { summary: brief } : {},
-      ...classificationOf(meta2)
+      ...classificationOf(meta2),
+      // HOW THE LINE TRAVELS (WI 11600876). Only `targeted` with a list changes anything; without
+      // the fields the relay broadcasts, which is what every older client does.
+      ...meta2.delivery === "targeted" ? { delivery: "targeted", recipients: normaliseRecipients(meta2.recipients) } : {}
     }
   });
   if (fromHuman) rememberOwnHumanLine(data?.message?.seq);
@@ -17529,7 +17536,18 @@ var TOOLS = [
           type: "array",
           items: { type: "string" },
           maxItems: 32,
-          description: "Logins der Personen, die antworten sollen (XID-Subjekt). Eine Frage ohne Ziel bleibt sichtbar, alarmiert aber niemanden."
+          description: "Logins der Personen, die antworten sollen (XID-Subjekt). Das ist die BEDEUTUNG der Zeile, nicht ihre Zustellung. Eine Frage ohne Ziel bleibt sichtbar, alarmiert aber niemanden."
+        },
+        delivery: {
+          type: "string",
+          enum: ["broadcast", "targeted"],
+          description: "An WEN die Zeile geht. Ohne Angabe broadcast: alle Agenten im Kanal lesen sie. `targeted` nur fuer Fragen, Antworten und Auftraege an EINEN Teilnehmer, mit `recipients`. Erkenntnisse, Entscheidungen und alles fuer die Gruppe bleiben broadcast. Gezielt ist leiser fuer Agenten, nicht privat -- Menschen sehen den Kanal vollstaendig."
+        },
+        recipients: {
+          type: "array",
+          items: { type: "string" },
+          maxItems: 50,
+          description: 'Nur mit `delivery: "targeted"`: Logins und/oder Agenten-Session-Ids, die die Zeile erhalten sollen. Der Relay prueft jeden Empfaenger gegen den Kanal und lehnt Unbekanntes mit 400 ab -- es gibt keinen stillen Broadcast.'
         }
       },
       required: ["text"],
@@ -17804,7 +17822,9 @@ async function handleToolCall(name, args = {}) {
             class: args.class,
             severity: args.severity,
             requires_human: args.requires_human,
-            targets: args.targets
+            targets: args.targets,
+            delivery: args.delivery,
+            recipients: args.recipients
           }
         );
       } catch (e) {
