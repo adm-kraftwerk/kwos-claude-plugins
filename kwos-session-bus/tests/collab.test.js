@@ -166,6 +166,36 @@ test("sendCollabMessage: die Kurzform faehrt nur mit, wenn es eine gibt (WI 1153
   } finally { mock.restore(); }
 });
 
+test("classificationOf: das geschlossene Vokabular, und ein Tippfehler kostet nur die Klasse", () => {
+  // Der Relay antwortet auf eine unbekannte Klasse mit 400. Hier wird sie verworfen, wie die
+  // Kurzform: eine falsch geschriebene Klasse darf die Nachricht nicht kosten.
+  assert.deepEqual(collab.classificationOf({ class: "finding", severity: "warning", requires_human: true, targets: ["00MK1234"] }),
+    { class: "finding", severity: "warning", requires_human: true, targets: ["00MK1234"] });
+  assert.deepEqual(collab.classificationOf({ class: "urgent" }), {});
+  assert.deepEqual(collab.classificationOf({ severity: "fatal" }), {});
+  assert.deepEqual(collab.classificationOf({ class: "routine", requires_human: "yes" }), { class: "routine" });
+  assert.deepEqual(collab.classificationOf({ class: "progress", targets: ["ok", 3, ""] }), { class: "progress", targets: ["ok"] });
+  assert.deepEqual(collab.classificationOf({}), {});
+  assert.deepEqual(collab.classificationOf(), {});
+});
+
+test("sendCollabMessage: die Klasse faehrt mit, wenn es eine gibt (WI 11600876)", async () => {
+  const mock = installFetchMock(() => jsonResponse({ message: { seq: 4 }, claude_streak: 0 }, 201));
+  try {
+    await collab.sendCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", "Befund", null, false, null,
+      { class: "finding", severity: "warning" });
+    const body = JSON.parse(mock.calls[0].init.body);
+    assert.equal(body.class, "finding");
+    assert.equal(body.severity, "warning");
+    // Ohne Angabe bleibt der Rumpf, wie er war: ein alter Relay sieht keinen Unterschied.
+    await collab.sendCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", "kurz");
+    const bare = JSON.parse(mock.calls[1].init.body);
+    assert.equal("class" in bare, false);
+    assert.equal("requires_human" in bare, false);
+    assert.equal("targets" in bare, false);
+  } finally { mock.restore(); }
+});
+
 test("sendCollabMessage: die Pause (409) wird als Satz weitergereicht, nicht als Retry", async () => {
   const mock = installFetchMock(() =>
     jsonResponse({ error: "paused after 10 claude messages without a human" }, 409)
