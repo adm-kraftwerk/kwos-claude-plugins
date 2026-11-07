@@ -317,6 +317,16 @@ export function classificationOf(meta = {}) {
  * channel off the screen. It is a courtesy, not a condition -- a line without one still arrives, and
  * the surfaces then take its first sentence. An older relay ignores the field entirely.
  */
+/** The recipients as the relay takes them: strings, trimmed, at most 50. Unknown ones are refused
+ *  there with a 400 -- the plugin never guesses and never turns a target into a broadcast. */
+export function normaliseRecipients(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((x) => typeof x === "string" && x.trim() !== "")
+    .map((x) => x.trim().slice(0, 200))
+    .slice(0, 50);
+}
+
 export async function sendCollabMessage(
   collabId, text, attachmentId = null, fromHuman = false, summary = null, meta = {},
 ) {
@@ -330,6 +340,11 @@ export async function sendCollabMessage(
       ...(attachmentId ? { attachment_id: attachmentId } : {}),
       ...(brief !== null ? { summary: brief } : {}),
       ...classificationOf(meta),
+      // HOW THE LINE TRAVELS (WI 11600876). Only `targeted` with a list changes anything; without
+      // the fields the relay broadcasts, which is what every older client does.
+      ...(meta.delivery === "targeted"
+        ? { delivery: "targeted", recipients: normaliseRecipients(meta.recipients) }
+        : {}),
     },
   });
   // A line we relayed as the human comes back to us looking exactly like the human's own (s.
@@ -425,9 +440,17 @@ export async function releaseLease(collabId, leaseId) {
   await call(`/v1/collabs/${encodeURIComponent(collabId)}/leases/${encodeURIComponent(leaseId)}`, { method: "DELETE" });
 }
 
-/** The SSE url of one channel, for the monitor. */
+/**
+ * The SSE url of one channel, for the monitor.
+ *
+ * THE SESSION TRAVELS WITH IT (WI 11600876): a stream without `session` is a PERSON's stream and
+ * receives every line, targeted ones included. With the id the relay knows which agent is listening
+ * and can leave out what was addressed to somebody else. The relay validates that this session
+ * belongs to the caller.
+ */
 export function collabEventsUrl(collabId) {
-  return `${config.relayUrl}/v1/collabs/${encodeURIComponent(collabId)}/events`;
+  const base = `${config.relayUrl}/v1/collabs/${encodeURIComponent(collabId)}/events`;
+  return config.sessionId ? `${base}?session=${encodeURIComponent(config.sessionId)}` : base;
 }
 
 // ── Inviting (2026-10-25, WI 11553520) ───────────────────────────────────────────────────────
