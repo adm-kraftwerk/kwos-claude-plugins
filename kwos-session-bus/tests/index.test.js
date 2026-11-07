@@ -239,6 +239,30 @@ test("collab_send bietet die semantischen Felder an -- und verlangt keines (WI 1
   assert.deepEqual(tool.inputSchema.required, ["text"]);
 });
 
+test("collab_send sagt bei 429, wann DIESER Agent wieder darf -- ohne dass ein Mensch etwas tut", async () => {
+  const mock = installFetchMock((url) => {
+    const u = String(url);
+    const json = (body, status = 200) => Promise.resolve({
+      ok: status < 400, status,
+      headers: { get: () => "application/json" },
+      text: async () => JSON.stringify(body),
+      json: async () => body,
+    });
+    if (u.includes("/v1/collabs") && !u.includes("/messages")) {
+      return json({ collabs: [{ collab_id: "c-1", workitem: "1", title: null, my_status: "joined", my_role: "member", members: [{ subject: "me", status: "joined", session_id: "sess-self" }] }] });
+    }
+    return json({ error: "too many messages from this agent; retry later", retry_after: 7 }, 429);
+  });
+  try {
+    const result = await handleToolCall("collab_send", { collab_id: "c-1", text: "x" });
+    const text = String(result.content?.[0]?.text ?? "");
+    assert.match(text, /in 7 s/);
+    assert.match(text, /niemand muss etwas freigeben/);
+  } finally {
+    mock.restore();
+  }
+});
+
 test("collab_send schreibt ohne from_human als 'claude' und mit ihm als 'human'", async () => {
   // Der Pausen-Zaehler zaehlt Agenten-Nachrichten in Folge. Wer die Worte seines Nutzers wortgleich
   // weitergibt, ist der MENSCH, der spricht -- `from_human` sagt das dem Relay. Der Test geht an
