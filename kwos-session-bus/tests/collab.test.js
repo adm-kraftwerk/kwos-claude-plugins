@@ -347,11 +347,37 @@ test("getCollabMessage: eine unbrauchbare seq geht gar nicht erst auf die Leitun
   } finally { mock.restore(); }
 });
 
-test("collabEventsUrl: der Kanal hat seinen eigenen SSE-Pfad", () => {
+test("collabEventsUrl: der Kanal hat seinen eigenen SSE-Pfad -- MIT der eigenen Session", () => {
+  // WI 11600876: ohne `session` ist der Strom ein PERSONEN-Strom und bekommt auch gezielte Zeilen.
   assert.equal(
     collab.collabEventsUrl("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c"),
-    `${config.relayUrl}/v1/collabs/7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c/events`
+    `${config.relayUrl}/v1/collabs/7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c/events?session=${encodeURIComponent(config.sessionId)}`
   );
+});
+
+test("normaliseRecipients: nur Zeichenketten, getrimmt, hoechstens 50", () => {
+  assert.deepEqual(collab.normaliseRecipients([" s-1 ", 3, "", null]), ["s-1"]);
+  assert.deepEqual(collab.normaliseRecipients("s-1"), []);
+  assert.equal(collab.normaliseRecipients(Array.from({ length: 80 }, (_, i) => `s-${i}`)).length, 50);
+});
+
+test("sendCollabMessage: die Zustellung faehrt nur mit, wenn sie gezielt ist", async () => {
+  const mock = installFetchMock(() => jsonResponse({ message: { seq: 5 } }, 201));
+  try {
+    await collab.sendCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", "an alle");
+    const broadcast = JSON.parse(mock.calls[0].init.body);
+    assert.equal("delivery" in broadcast, false);
+    assert.equal("recipients" in broadcast, false);
+
+    await collab.sendCollabMessage("7f3a1b2c-9d4e-4f5a-8b6c-7d8e9f0a1b2c", "nur an tim", null, false, null, {
+      delivery: "targeted", recipients: [" s-tim ", "00mk1234"],
+    });
+    const targeted = JSON.parse(mock.calls[1].init.body);
+    assert.equal(targeted.delivery, "targeted");
+    assert.deepEqual(targeted.recipients, ["s-tim", "00mk1234"]);
+    // `targets` bleibt die Bedeutung und wird nicht zur Zustellung umgedeutet.
+    assert.equal("targets" in targeted, false);
+  } finally { mock.restore(); }
 });
 
 // ── Beitreten, Ablehnen, Abkoppeln ────────────────────────────────────────────────────────────

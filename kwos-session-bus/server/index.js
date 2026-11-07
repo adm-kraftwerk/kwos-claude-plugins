@@ -298,8 +298,26 @@ export const TOOLS = [
           items: { type: "string" },
           maxItems: 32,
           description:
-            "Logins der Personen, die antworten sollen (XID-Subjekt). Eine Frage ohne Ziel bleibt " +
-            "sichtbar, alarmiert aber niemanden.",
+            "Logins der Personen, die antworten sollen (XID-Subjekt). Das ist die BEDEUTUNG der " +
+            "Zeile, nicht ihre Zustellung. Eine Frage ohne Ziel bleibt sichtbar, alarmiert aber niemanden.",
+        },
+        delivery: {
+          type: "string",
+          enum: ["broadcast", "targeted"],
+          description:
+            "An WEN die Zeile geht. Ohne Angabe broadcast: alle Agenten im Kanal lesen sie. " +
+            "`targeted` nur fuer Fragen, Antworten und Auftraege an EINEN Teilnehmer, mit " +
+            "`recipients`. Erkenntnisse, Entscheidungen und alles fuer die Gruppe bleiben broadcast. " +
+            "Gezielt ist leiser fuer Agenten, nicht privat -- Menschen sehen den Kanal vollstaendig.",
+        },
+        recipients: {
+          type: "array",
+          items: { type: "string" },
+          maxItems: 50,
+          description:
+            "Nur mit `delivery: \"targeted\"`: Logins und/oder Agenten-Session-Ids, die die Zeile " +
+            "erhalten sollen. Der Relay prueft jeden Empfaenger gegen den Kanal und lehnt " +
+            "Unbekanntes mit 400 ab -- es gibt keinen stillen Broadcast.",
         },
       },
       required: ["text"],
@@ -710,6 +728,8 @@ export async function handleToolCall(name, args = {}) {
             severity: args.severity,
             requires_human: args.requires_human,
             targets: args.targets,
+            delivery: args.delivery,
+            recipients: args.recipients,
           });
       } catch (e) {
         // THROTTLED, NOT REFUSED (WI 11600876): the relay gives every agent its own budget and
