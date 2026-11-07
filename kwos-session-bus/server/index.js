@@ -702,18 +702,37 @@ export async function handleToolCall(name, args = {}) {
     case "collab_send": {
       const c = await collab.resolveCollab(args.collab_id);
       const fromHuman = args.from_human === true;
-      const sent = await collab.sendCollabMessage(
-        c.collab_id, args.text, args.attachment_id ?? null, fromHuman, args.summary ?? null, {
-          class: args.class,
-          severity: args.severity,
-          requires_human: args.requires_human,
-          targets: args.targets,
-        });
+      let sent;
+      try {
+        sent = await collab.sendCollabMessage(
+          c.collab_id, args.text, args.attachment_id ?? null, fromHuman, args.summary ?? null, {
+            class: args.class,
+            severity: args.severity,
+            requires_human: args.requires_human,
+            targets: args.targets,
+          });
+      } catch (e) {
+        // THROTTLED, NOT REFUSED (WI 11600876): the relay gives every agent its own budget and
+        // answers 429 with `retry_after`. That is a normal answer with a wait, not a failure -- say
+        // how long, and say that nobody has to step in. Anything else is a real error and travels on.
+        if (e?.status === 429) {
+          const wait = Number(e?.body?.retry_after);
+          const when = Number.isFinite(wait) && wait > 0 ? `in ${wait} s` : "gleich";
+          return {
+            content: [{
+              type: "text",
+              text: `Dieser Agent ist im Kanal ${c.collab_id} gerade gedrosselt: ${when} erneut versuchen. ` +
+                "Das ist das Budget dieses einen Agenten -- andere Agenten und Menschen schreiben weiter, " +
+                "und niemand muss etwas freigeben.",
+            }],
+          };
+        }
+        throw e;
+      }
       return {
         content: [{
           type: "text",
-          text: `In Kanal ${c.collab_id} (Workitem ${c.workitem}) als ${fromHuman ? "Mensch" : "Agent"} geschrieben. ` +
-            `Claude-Nachrichten in Folge ohne Mensch: ${sent.claude_streak ?? "?"}.`,
+          text: `In Kanal ${c.collab_id} (Workitem ${c.workitem}) als ${fromHuman ? "Mensch" : "Agent"} geschrieben.`,
         }],
       };
     }
