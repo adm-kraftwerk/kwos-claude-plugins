@@ -24,7 +24,7 @@ import { getAccessToken } from "./auth.js";
 
 // Exported for the kwcollab calls (server/collab.js): ONE place builds the URL, the bearer and the
 // error text. A second fetch helper next door would be a second place that can forget the token.
-export async function call(path, { method = "GET", body, headers } = {}) {
+export async function call(path, { method = "GET", body, headers, timeoutMs } = {}) {
   if (!config.relayUrl) {
     throw new Error("KWOS_RELAY_URL ist nicht gesetzt.");
   }
@@ -37,6 +37,7 @@ export async function call(path, { method = "GET", body, headers } = {}) {
       ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,
+    ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
   });
 
   if (!res.ok && res.status !== 202) {
@@ -77,6 +78,28 @@ export function heartbeat() {
   return call(`/v1/sessions/${encodeURIComponent(config.sessionId)}/heartbeat`, {
     method: "POST",
   });
+}
+
+/**
+ * POST /v1/sessions/{self}/unregister — beim sauberen Sitzungsende, nicht als Tool exponiert.
+ *
+ * One attempt within a short deadline, no retry: the relay ages the row out on its own, and a retry
+ * would only hold a dying process open. The deadline covers the token lookup too -- on a cache miss
+ * the helper is spawned, which takes longer than the fetch it feeds.
+ */
+export async function unregister({ timeoutMs = 1500 } = {}) {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`unregister: keine Antwort in ${timeoutMs} ms`)), timeoutMs);
+  });
+  try {
+    await Promise.race([
+      call(`/v1/sessions/${encodeURIComponent(config.sessionId)}/unregister`, { method: "POST", timeoutMs }),
+      deadline,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** GET /v1/sessions — Tool list_sessions. */

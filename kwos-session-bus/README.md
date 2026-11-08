@@ -91,6 +91,11 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
   gibt pro eingehender Nachricht eine formatierte Zeile (`[from]: text`) auf stdout aus.
   Trägt eine Nachricht eine `attachment_id`, wird das als zusätzlicher Hinweis in derselben
   Zeile angehängt (kein eigener Kanal, kein Autowake).
+  **Abmeldung beim Ende (WI 11600377):** SIGTERM, SIGINT und SIGHUP beenden den Monitor; er sendet
+  dann einmalig `POST /v1/sessions/{self}/unregister` innerhalb einer kurzen Frist und endet erst
+  danach. Die Sitzung fällt damit sofort aus der Liste, statt nach der Frist des Relays. Kein
+  Retry und kein Warten über die Frist hinaus: der Relay räumt die Zeile ohnehin selbst ab.
+  Der MCP-Server meldet nicht ab; er kann unabhängig von der Sitzung neu gestartet werden.
   **Warum genau einer (WI 11506447, 2026-10-19):** ein Monitor-Eintrag ist ein Versprechen des
   Harness — Claude Code startet ihn bei jedem Sitzungsbeginn (ein fehlendes `when` und `"always"`
   sind dasselbe) und **kündigt ihn mit seiner Beschreibung an**, bevor der Prozess irgendetwas
