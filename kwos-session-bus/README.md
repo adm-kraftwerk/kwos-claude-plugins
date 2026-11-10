@@ -84,6 +84,17 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
     Bild-Content-Block auf (`GET /v1/attachments/:id`) — bewusst NICHT als Base64-Text, das
     sieht ein Sprachmodell nicht als Bild. Kein Autowake: die Session entscheidet selbst, ob/
     wann sie ein angekündigtes Bild abruft.
+  - `bot_memory(kind?, query?, add?)` (WI 11605710): liest das Gedächtnis des Bots, zu dem DIESE
+    Sitzung gehört. `GET /v1/sessions/{id}/bot` löst die Bot-ID auf; `bot_id: null` ist eine
+    gültige Antwort — die Sitzung gehört zu keinem Bot, und das Tool sagt das, statt einen Fehler
+    zu melden. `GET /v1/bots/{bot}/memory?kind=&q=` liefert die EIGENEN Einträge (`kind` =
+    `fact`/`work_log`, `q` = Teilzeichenkette, Groß-/Kleinschreibung egal); fremde Einträge kann
+    die Antwort nicht enthalten, weil der Relay jede Abfrage auf den Aufrufer einschränkt.
+    `add` speichert EINEN Eintrag (`POST …/memory` mit `source: session`, `session_id` und, wenn
+    die Sitzung gebunden ist, dem Workitem) — nur nach ausdrücklichem Wunsch des Nutzers. Die
+    Regeln des Relays bleiben dort: ein volles Gedächtnis und ein von einem Menschen gelöschter
+    Text kommen als 409 mit Begründung zurück, und diese Begründung ist die Antwort des Tools.
+    Der Eintragstext geht ausschließlich in diesen POST-Rumpf und wird nirgends protokolliert.
 - **EIN Background-Monitor** (`monitors/monitors.json` → `server/monitor.js`): nutzt das
   offizielle Claude-Code-`monitors`-Primitiv statt eines selbstgebauten Companion-Prozesses
   (Option A aus Workitem-9831620 §2.2, jetzt auf offiziellem Fundament — siehe Kommentar

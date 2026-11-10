@@ -7,6 +7,7 @@ import { isMainModule } from "./is-main.js";
 import * as relay from "./relay-client.js";
 import * as collab from "./collab.js";
 import { CODE_TOOLS, CODE_TOOL_NAMES, handleCodeTool } from "./codeTools.js";
+import { BOT_MEMORY_TOOLS, BOT_MEMORY_TOOL_NAMES, handleBotMemoryTool } from "./botMemory.js";
 
 export const TOOLS = [
   {
@@ -436,6 +437,8 @@ export const TOOLS = [
   },
   // Code exchange (WI 11517979): own file.
   ...CODE_TOOLS,
+  // The bot's memory (WI 11605710): own file, one tool.
+  ...BOT_MEMORY_TOOLS,
 ];
 
 // The version the MCP client sees in the handshake. It names the SAME artifact as plugin.json /
@@ -527,6 +530,7 @@ export async function handleToolCall(name, args = {}) {
     throw new Error(name + " gibt es nur in einer Remote-Control-Sitzung (--kwremote) -- dieser Mensch sitzt am Terminal, frag dort.");
   }
   if (CODE_TOOL_NAMES.has(name)) return handleCodeTool(name, args);
+  if (BOT_MEMORY_TOOL_NAMES.has(name)) return handleBotMemoryTool(name, args);
   switch (name) {
     case "list_sessions": {
       const sessions = await relay.listSessions();

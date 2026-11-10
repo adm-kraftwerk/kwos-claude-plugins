@@ -17327,6 +17327,130 @@ ${reportText(s.report, ctx.names)}${await memoryText(ctx)}`);
   }
 }
 
+// server/botMemory.js
+var BOT_MEMORY_TOOLS = [
+  {
+    name: "bot_memory",
+    description: "Liest das Ged\xE4chtnis des Bots, zu dem DIESE Sitzung geh\xF6rt (WI 11605710): was dort \xFCber fr\xFChere Sitzungen hinweg gemerkt wurde. Ohne `add` wird nur gelesen -- optional auf eine Art (`kind`) eingeschr\xE4nkt und mit `query` als Suche (Teilzeichenkette, Gro\xDF- und Kleinschreibung egal). Geh\xF6rt die Sitzung zu keinem Bot, sagt die Antwort das ausdr\xFCcklich; das ist der Normalfall einer gew\xF6hnlichen Sitzung und kein Fehler. Mit `add` wird EIN Eintrag gespeichert -- ausschlie\xDFlich, wenn dein Nutzer es ausdr\xFCcklich gesagt hat (\u201Emerk dir \u2026\u201C, \u201Enotier das\u201C), niemals auf Verdacht und niemals aus dem Gespr\xE4chsverlauf geraten. Gespeichert wird als Vorschlag dieser Sitzung (`source: session`), damit ein Mensch sieht, woher der Text stammt. Vor dem Arbeiten an etwas, das schon einmal entschieden wurde, hier nachsehen, bevor du dieselbe Frage noch einmal stellst.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: {
+          type: "string",
+          enum: ["fact", "work_log"],
+          description: "Art der Eintr\xE4ge. `fact`: eine bleibende Tatsache (Vorliebe, Entscheidung, Projektwissen). `work_log`: was eine Sitzung getan hat und was offen blieb. Ohne Angabe beim Lesen beide Arten; beim Speichern ist `fact` die Vorgabe."
+        },
+        query: {
+          type: "string",
+          description: "Suchtext f\xFCr das Lesen: Teilzeichenkette \xFCber den Text der Eintr\xE4ge, unabh\xE4ngig von Gro\xDF- und Kleinschreibung. Nicht zusammen mit `add`."
+        },
+        add: {
+          type: "string",
+          description: "EIN Eintrag, der gespeichert wird -- nur nach ausdr\xFCcklichem Wunsch des Nutzers, nie auf Verdacht. Den Text so lassen, wie der Nutzer ihn gesagt hat: nicht umformulieren, nicht erg\xE4nzen, nichts aus dem Gespr\xE4ch hinzuerfinden. Nicht zusammen mit `query`."
+        }
+      },
+      additionalProperties: false
+    }
+  }
+];
+var BOT_MEMORY_TOOL_NAMES = new Set(BOT_MEMORY_TOOLS.map((t) => t.name));
+async function sessionBot(sessionId) {
+  const { data } = await call(`/v1/sessions/${encodeURIComponent(sessionId)}/bot`);
+  return data ?? {};
+}
+async function readBotMemory(botId, { kind, query } = {}) {
+  const params = new URLSearchParams();
+  if (kind) params.set("kind", kind);
+  if (query) params.set("q", query);
+  const qs = params.toString();
+  const { data } = await call(`/v1/bots/${encodeURIComponent(botId)}/memory${qs ? `?${qs}` : ""}`);
+  if (!data || !Array.isArray(data.entries)) {
+    throw new Error(
+      "Die Antwort des Relays auf die Ged\xE4chtnis-Abfrage war kein lesbares JSON -- vermutlich eine Fehlerseite/Proxy-Antwort, nicht ein leeres Ged\xE4chtnis."
+    );
+  }
+  return data;
+}
+async function addBotMemory(botId, { text: text2, kind, sessionId, workitem } = {}) {
+  const body = {
+    text: text2,
+    source: "session",
+    ...kind ? { kind } : {},
+    ...sessionId ? { session_id: sessionId } : {},
+    ...workitem ? { workitem } : {}
+  };
+  const { data } = await call(`/v1/bots/${encodeURIComponent(botId)}/memory`, { method: "POST", body });
+  if (!data?.entry) {
+    throw new Error("Der Relay hat den Eintrag nicht zur\xFCckgegeben (unerwartete Antwort).");
+  }
+  return data.entry;
+}
+var answer = (t) => ({ content: [{ type: "text", text: t }] });
+function chosenKind(raw) {
+  if (raw === void 0 || raw === null || raw === "") return void 0;
+  if (raw !== "fact" && raw !== "work_log") {
+    throw new Error(`kind muss "fact" oder "work_log" sein (erhalten: ${JSON.stringify(raw)}).`);
+  }
+  return raw;
+}
+function chosenQuery(raw) {
+  if (raw === void 0 || raw === null) return void 0;
+  const text2 = String(raw).trim();
+  return text2 === "" ? void 0 : text2;
+}
+function scopeSuffix(kind, query) {
+  const parts = [kind ? `kind=${kind}` : null, query ? `Suche "${query}"` : null].filter(Boolean);
+  return parts.length ? ` (${parts.join(", ")})` : "";
+}
+async function handleBotMemoryTool(name, args = {}) {
+  if (!BOT_MEMORY_TOOL_NAMES.has(name)) throw new Error(`Unbekanntes Tool: ${name}`);
+  const kind = chosenKind(args.kind);
+  const query = chosenQuery(args.query);
+  const add = args.add === void 0 || args.add === null ? void 0 : String(args.add);
+  if (add !== void 0) {
+    if (add.trim() === "") {
+      throw new Error("add ist leer -- ohne Text gibt es nichts zu merken.");
+    }
+    if (query !== void 0) {
+      throw new Error("add und query schlie\xDFen sich aus: entweder EINEN Eintrag merken oder suchen.");
+    }
+  }
+  await ensureSessionId();
+  const sessionId = config2.sessionId;
+  const bot = await sessionBot(sessionId);
+  if (bot.bot_id === null) {
+    return answer(
+      "Diese Sitzung geh\xF6rt zu keinem Bot -- es gibt kein Ged\xE4chtnis, das zu ihr geh\xF6rt. Das ist der Normalfall: nur eine Sitzung, die aus einem Bot gestartet wurde, hat eines."
+    );
+  }
+  if (typeof bot.bot_id !== "string" || bot.bot_id === "") {
+    throw new Error(
+      "Der Relay hat keinen Bot genannt (unerwartete Antwort auf GET /v1/sessions/:id/bot)."
+    );
+  }
+  if (add !== void 0) {
+    const entry = await addBotMemory(bot.bot_id, {
+      text: add,
+      kind,
+      sessionId,
+      workitem: config2.workitem ?? void 0
+    });
+    return answer(
+      `Gemerkt als Eintrag ${entry.entry_id}${entry.kind ? ` (${entry.kind})` : ""} von Bot ${bot.bot_id}.`
+    );
+  }
+  const memory = await readBotMemory(bot.bot_id, { kind, query });
+  const suffix = scopeSuffix(kind, query);
+  if (memory.entries.length === 0) {
+    return answer(`Der Bot ${bot.bot_id} hat keine Eintr\xE4ge${suffix}.`);
+  }
+  const count = memory.entries.length;
+  return answer(
+    `Ged\xE4chtnis von Bot ${bot.bot_id}: ${count} Eintrag${count === 1 ? "" : "e"}${suffix}.
+` + JSON.stringify(memory.entries, null, 2)
+  );
+}
+
 // server/index.js
 var TOOLS = [
   {
@@ -17635,7 +17759,9 @@ var TOOLS = [
     }
   },
   // Code exchange (WI 11517979): own file.
-  ...CODE_TOOLS
+  ...CODE_TOOLS,
+  // The bot's memory (WI 11605710): own file, one tool.
+  ...BOT_MEMORY_TOOLS
 ];
 var server = new Server(
   { name: "kwos-session-bus", version: "0.9.2" },
@@ -17673,6 +17799,7 @@ async function handleToolCall(name, args = {}) {
     throw new Error(name + " gibt es nur in einer Remote-Control-Sitzung (--kwremote) -- dieser Mensch sitzt am Terminal, frag dort.");
   }
   if (CODE_TOOL_NAMES.has(name)) return handleCodeTool(name, args);
+  if (BOT_MEMORY_TOOL_NAMES.has(name)) return handleBotMemoryTool(name, args);
   switch (name) {
     case "list_sessions": {
       const sessions = await listSessions();
