@@ -134,8 +134,16 @@ test("an unreadable working directory costs a generic name, not the process", ()
   mkdirSync(child, { recursive: true });
   const home = scratch();
   const probe = join(home, "probe.mjs");
+  // WINDOWS CANNOT BUILD THIS CASE WITH PERMISSIONS (measured 2026-11-10): `chmod 000` takes
+  // nothing away there (ACLs, no mode bits) and this process owns the directory, so the cwd stays
+  // readable and the test would fail for the wrong reason. Windows therefore builds the EFFECT:
+  // `process.cwd()` throws EPERM, exactly what macOS does after the directory is deleted. The
+  // assertions below stay the same on both platforms -- no silent skip.
+  const throwInProbe = process.platform === "win32"
+    ? 'process.cwd = () => { const e = new Error("EPERM: cwd unreadable"); e.code = "EPERM"; throw e; };\n'
+    : "";
   writeFileSync(probe, `
-    const { config, ensureSessionId, sessionCwd } = await import(${JSON.stringify(CONFIG_URL)});
+    ${throwInProbe}const { config, ensureSessionId, sessionCwd } = await import(${JSON.stringify(CONFIG_URL)});
     const id = await ensureSessionId();
     console.log(JSON.stringify({ cwd: sessionCwd, name: config.displayName, channels: config.channels, id }));
   `, "utf8");
@@ -146,18 +154,21 @@ test("an unreadable working directory costs a generic name, not the process", ()
   const started = Date.now();
   let out;
   try {
-    out = execFileSync("/bin/sh", ["-c", `chmod 000 "${root}" && "${process.execPath}" "${probe}"; status=$?; chmod 755 "${root}"; exit $status`], {
-      cwd: child,
-      // HOME points at a scratch dir: os.homedir() would otherwise read a real session-name file.
-      env: {
-        ...process.env,
-        HOME: home,
-        KWOS_CLIENT_ID: CLIENT_ID,
-        KWOS_CHANNELS: "",
-        CLAUDE_CODE_SESSION_ID: "session-FROM-ENV",
-      },
-      encoding: "utf8",
-    });
+    // HOME points at a scratch dir: os.homedir() would otherwise read a real session-name file.
+    const env = {
+      ...process.env,
+      HOME: home,
+      KWOS_CLIENT_ID: CLIENT_ID,
+      KWOS_CHANNELS: "",
+      CLAUDE_CODE_SESSION_ID: "session-FROM-ENV",
+    };
+    out = process.platform === "win32"
+      ? execFileSync(process.execPath, [probe], { cwd: child, env, encoding: "utf8" })
+      : execFileSync("/bin/sh", ["-c", `chmod 000 "${root}" && "${process.execPath}" "${probe}"; status=$?; chmod 755 "${root}"; exit $status`], {
+        cwd: child,
+        env,
+        encoding: "utf8",
+      });
   } finally {
     try { chmodSync(root, 0o755); } catch { /* the shell restored it already */ }
   }
