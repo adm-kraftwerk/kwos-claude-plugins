@@ -445,7 +445,7 @@ export const TOOLS = [
 // marketplace.json, so it moves with them -- it had been left at 0.5.0 through the 0.5.1 bump,
 // and again at 0.9.2 through every bump up to 0.9.11 (found 2026-11-10 with the bot_memory bump).
 const server = new Server(
-  { name: "kwos-session-bus", version: "0.9.11" },
+  { name: "kwos-session-bus", version: "0.9.12" },
   { capabilities: { tools: {} } }
 );
 
