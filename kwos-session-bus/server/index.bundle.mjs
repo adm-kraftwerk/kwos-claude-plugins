@@ -17764,7 +17764,7 @@ var TOOLS = [
   ...BOT_MEMORY_TOOLS
 ];
 var server = new Server(
-  { name: "kwos-session-bus", version: "0.9.2" },
+  { name: "kwos-session-bus", version: "0.9.11" },
   { capabilities: { tools: {} } }
 );
 var REMOTE_ONLY_TOOLS = /* @__PURE__ */ new Set(["ask_remote"]);
