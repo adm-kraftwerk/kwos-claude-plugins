@@ -5,6 +5,11 @@
       "url": "https://os.kraftwerk.io/mcp",
       "headersHelper": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/mcp-headers.mjs\""
     },
+    "kwos-bots": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/bots-mcp.mjs"]
+    },
     "bc365": {
       "type": "http",
       "url": "https://oscar.msu-solutions.de/bc-explorer/mcp",
@@ -21,10 +26,6 @@
         "authServerMetadataUrl": "https://ms365.os.kraftwerk.io/.well-known/oauth-authorization-server",
         "scopes": "Mail.ReadWrite Mail.Send Mail.Read.Shared Mail.Send.Shared User.Read.All MailboxSettings.Read MailboxSettings.ReadWrite Calendars.ReadWrite Calendars.Read.Shared Files.ReadWrite Notes.Read Notes.Create Notes.ReadWrite Tasks.ReadWrite Contacts.ReadWrite User.Read People.Read Chat.Read ChatMember.Read ChatMessage.Read ChatMessage.Send Team.ReadBasic.All Channel.ReadBasic.All Channel.Create ChannelSettings.ReadWrite.All Channel.Delete.All ChannelMessage.Read.All ChannelMessage.Send TeamMember.ReadWrite.All TeamsTab.Read.All TeamMember.Read.All Chat.ReadWrite Sites.Read.All Sites.ReadWrite.All Files.Read.All OnlineMeetings.Read OnlineMeetings.ReadWrite Group.Read.All Group.ReadWrite.All Presence.Read Presence.Read.All VirtualEvent.Read"
       }
-    },
-    "a2a": {
-      "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/server/a2a-tool.mjs"]
     }
   }
 }

@@ -46,20 +46,11 @@
  *     path cannot be split a second time.
  */
 
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { homedir, platform } from "node:os";
-import { join } from "node:path";
-
-/** How long the token helper may take — after that it counts as unreachable. */
-const HELPER_TIMEOUT_MS = 20_000;
-
-const isWindows = platform() === "win32";
-
-/** The same path and the same overrides as the session bus: ONE vocabulary. */
-const helperPath =
-  process.env.KWOS_XID_TOKEN_HELPER_PATH ||
-  join(homedir(), ".config", "kraftwerk", isWindows ? "xiam-token.ps1" : "xiam-token.sh");
+/**
+ * The token itself lives in `xiam-token.mjs` since the bots MCP needs the same one (WI 11609130):
+ * ONE login path for every helper of this plugin, not a copy per server.
+ */
+import { accessToken as tokenFromHelper } from "./xiam-token.mjs";
 
 function fail(reason) {
   process.stderr.write(`kraftwerkos/mcp-headers: ${reason}\n`);
@@ -67,29 +58,7 @@ function fail(reason) {
   process.exit(1);
 }
 
-function accessToken() {
-  const override = (process.env.KWOS_XID_ACCESS_TOKEN || "").trim();
-  if (override !== "") return override;
-  if (!existsSync(helperPath)) fail(`token helper not found: ${helperPath}`);
-
-  const [command, args] = isWindows
-    ? ["powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helperPath]]
-    : ["bash", [helperPath]];
-  const result = spawnSync(command, args, {
-    env: { ...process.env, XIAM_REFRESH_ONLY: "1" },
-    encoding: "utf8",
-    timeout: HELPER_TIMEOUT_MS,
-  });
-  if (result.error) fail(`${command} could not be started: ${result.error.message}`);
-  if (result.status !== 0) {
-    fail(`${helperPath} exited with ${result.status}: ${(result.stderr || "").trim()}`);
-  }
-  const token = (result.stdout || "").trim();
-  if (token === "") fail(`${helperPath} returned no token`);
-  return token;
-}
-
-const headers = { Authorization: `Bearer ${accessToken()}` };
+const headers = { Authorization: `Bearer ${tokenFromHelper(fail)}` };
 /** The workitem, when the session has one — kw/OS attributes what this belongs to with it. */
 const workitem = (process.env.KWOS_WORKITEM || "").trim();
 if (workitem !== "") headers["X-KWOS-Workitem"] = workitem;
