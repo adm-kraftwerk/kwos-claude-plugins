@@ -10,7 +10,10 @@ description: >
   („lerne dieses Repo kennen", „initiale Wissensbasis erstellen").
   Löst NICHT aus bei Tippfehlern, Umbenennungen, sitzungsspezifischem Zwischenstand oder
   Vermutungen ohne Beleg.
-tools: Read, Glob, Grep, Bash, Agent
+# `allowed-tools` ist das Feld, das Claude Code für Skills liest (`tools` ist eines für Agenten und
+# wird hier still ignoriert). Aufgeführt ist, was der Skill wirklich aufruft: die MCP-Werkzeuge
+# von `kraftwerk-os` und die lokalen Leser.
+allowed-tools: Read, Glob, Grep, Bash, Agent, knowledge_ask, knowledge_find_documents, knowledge_find_similar, knowledge_fts_search, knowledge_list_documents, knowledge_my_scopes, knowledge_read_document, knowledge_remember, knowledge_update_document, searchWikiEntries, getWorkitemDetails, upsertWikiEntry, addWorkitemComment
 ---
 
 # knowledge-memory
@@ -168,26 +171,22 @@ der Skill erledigt es nur mit.
 ```
 knowledge_remember(title, content, scope, context?, tags?)
         ↓ Antwort enthält document_uuid
-knowledge_check_note(document_uuid, scope)
-        ↓ erst wenn "done":
+knowledge_read_document(document_uuid)
+        ↓ erst wenn das Dokument lesbar zurückkommt:
 "gespeichert" melden
 ```
 
 **Vorher „übergeben" melden, nicht „gespeichert".** Der Aufruf bestätigt die Annahme; das
 Zerlegen, Einbetten und Verschlagworten läuft danach und dauert je nach Auslastung Minuten.
+Zurückgelesen wird mit `knowledge_read_document` (oder, wenn nur die Existenz zählt,
+`knowledge_find_documents` im Zielbereich); erst was zurückkommt, ist angekommen.
 
-Die Zustände von `knowledge_check_note`:
-
-| Zustand | Bedeutung | Was tun |
-|---|---|---|
-| `queued`, `processing` | unterwegs | kurz warten, erneut fragen |
-| `done` | angekommen | jetzt darfst du Erfolg melden |
-| `deduped` | inhaltsgleich war schon etwas da | **kein Fehler.** Die Notiz liegt unter der Kennung in `source`, nicht unter der zugesagten. Diese Kennung weitergeben, nicht die eigene |
-| `failed` | abgebrochen | Grund lesen und dem Menschen zeigen. Nicht stillschweigend erneut versuchen |
-| `unknown` | keine Übergabe unter dieser Kennung | Aufruf ging nicht durch |
-
-Höchstens dreimal nachfragen mit wachsendem Abstand. Steht es dann noch auf `queued`, dem
-Menschen sagen, dass die Verarbeitung länger dauert — nicht endlos pollen.
+**Es gibt keinen Job-Zustand zum Abfragen.** Der Server von `kraftwerk-os` führt kein
+`knowledge_check_note` und keine Zustandstabelle (`queued`, `processing`, `deduped`, `failed`).
+Ist das Dokument nach dem Zurücklesen noch nicht da, heißt das: **noch nicht fertig** — dem
+Menschen sagen, dass die Verarbeitung läuft, statt zu pollen oder „gespeichert" zu behaupten.
+Ein inhaltsgleiches Dokument erscheint unter der Kennung, die `knowledge_find_documents` nennt;
+diese weitergeben, nicht die eigene.
 
 ### Form einer Notiz
 
@@ -215,7 +214,7 @@ Auf Zuruf („lerne dieses Repo kennen"). Nicht von selbst.
    erzeugt viel auf einmal; das ist genau der Moment, in dem eine falsche Zielwahl in die
    Breite geht.
 6. In Blöcken übergeben und danach zählen. „0 fehlgeschlagen" sagt nichts über das Ergebnis
-   der asynchronen Verarbeitung — `knowledge_check_note` sagt es.
+   der asynchronen Verarbeitung — zurückgelesen wird mit `knowledge_read_document` je Kennung.
 
 Grössenordnung: zehn bis dreissig gute Einträge. Wer hundert schreibt, hat nicht verstanden,
 was jemand am ersten Tag wirklich braucht.
