@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 // KWOS_XID_ACCESS_TOKEN vor jedem Import setzen (s. relay-client.test.js) -- listen.js importiert
 // transitiv relay-client.js -> config.js. Kein main()-Aufruf beim Import (Guard in listen.js).
 process.env.KWOS_XID_ACCESS_TOKEN = "test-token";
-const { formatLine, createLineWriter, forwardToWriter, MAX_LINE_CHARS, LINE_SPACING_MS } = await import("../server/listen.js");
+const { formatLine, createLineWriter, createSplitCoalescer, forwardToWriter, MAX_LINE_CHARS, LINE_SPACING_MS, SPLIT_HOLD_MS } = await import("../server/listen.js");
 
 test("normale Textnachricht ohne Attachment", () => {
   const raw = JSON.stringify({ from_session: "sess-abc", text: "hallo" });
@@ -258,4 +258,132 @@ test("flush() wartet auch auf einen ausstehenden Wiederholungsversuch", async ()
   assert.deepEqual(written, []);
   await write.flush();
   assert.deepEqual(written, ["eins\n"], "flush() darf nicht aufloesen, solange die Queue voll ist");
+});
+
+// ── Split messages: ONE notification per logical message ──────────────────────
+// The relay splits a long message into parts "(i/n) " before it stores them (relay/lib.js
+// splitLongMessage), each part its own seq -- the monitor wrote one line per part, and lines
+// written in one tight loop are bundled by the harness into one notification capped at 3000
+// characters: of 6 parts only part 1 arrived. The coalescer holds the head until it knows whether
+// parts follow, writes it once with a hint naming the seq, and drops the rest of the run.
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const frame = (from, text, seq) => JSON.stringify({ from_session: from, text, seq });
+
+test("the coalescer decides hold / drop / write", () => {
+  const out = [];
+  const c = createSplitCoalescer({ windowMs: 20, onWrite: (raw) => out.push(raw) });
+  assert.deepEqual(c.feed(frame("a", "(1/3) eins", 1)), { action: "hold" });
+  assert.deepEqual(c.feed(frame("a", "(2/3) zwei", 2)), { action: "drop" });
+  assert.deepEqual(c.feed(frame("a", "(3/3) drei", 3)), { action: "drop" });
+  assert.deepEqual(c.feed(frame("a", "normal", 4)), { action: "write", data: frame("a", "normal", 4) });
+  // The head went out through onWrite, rewritten with the hint -- exactly once.
+  assert.equal(out.length, 1);
+  assert.match(JSON.parse(out[0]).split_hint, /get_message\(seq=1\)/);
+});
+
+test("six parts of one message become exactly ONE line naming get_message(seq)", async () => {
+  const written = [];
+  const forward = forwardToWriter((line) => written.push(line), { windowMs: 20 });
+  for (let i = 1; i <= 6; i++) forward(frame("sess-a", `(${i}/6) teil ${i}`, 100 + i));
+  assert.equal(written.length, 1, `expected one line, got ${written.length}: ${JSON.stringify(written)}`);
+  assert.equal(written[0], "[sess-a]: (1/6) teil 1 [Nachricht in 6 Teilen -- get_message(seq=101)]");
+  assert.ok(!written[0].includes("teil 2"), `a later part leaked into the line: ${written[0]}`);
+  // The window elapsing must not add a second line: the run is finished, not still held.
+  await sleep(80);
+  assert.equal(written.length, 1);
+});
+
+test("a lone (1/3) is written after the window, not lost and not held longer", async () => {
+  const written = [];
+  const forward = forwardToWriter((line) => written.push(line), { windowMs: 20 });
+  forward(frame("sess-a", "(1/3) anfang", 7));
+  assert.deepEqual(written, [], "the head is held while part 2 could still follow");
+  await sleep(80);
+  assert.deepEqual(written, ["[sess-a]: (1/3) anfang"]);
+});
+
+test("a part without a head (monitor started mid-message) is written, not swallowed", () => {
+  const written = [];
+  const forward = forwardToWriter((line) => written.push(line), { windowMs: 20 });
+  forward(frame("sess-a", "(3/6) mittendrin", 12));
+  assert.deepEqual(written, ["[sess-a]: (3/6) mittendrin"]);
+});
+
+test("a gap (1/3 then 3/3) writes both parts", () => {
+  const written = [];
+  const forward = forwardToWriter((line) => written.push(line), { windowMs: 20 });
+  forward(frame("sess-a", "(1/3) anfang", 1));
+  forward(frame("sess-a", "(3/3) ende", 3));
+  assert.deepEqual(written, ["[sess-a]: (1/3) anfang", "[sess-a]: (3/3) ende"]);
+});
+
+test("a sender change breaks the association and writes both", () => {
+  const written = [];
+  const forward = forwardToWriter((line) => written.push(line), { windowMs: 20 });
+  forward(frame("sess-a", "(1/3) anfang", 1));
+  forward(frame("sess-b", "(2/3) fremd", 2));
+  assert.deepEqual(written, ["[sess-a]: (1/3) anfang", "[sess-b]: (2/3) fremd"]);
+});
+
+test("a different n breaks the association and writes the head", () => {
+  const written = [];
+  const forward = forwardToWriter((line) => written.push(line), { windowMs: 20 });
+  forward(frame("sess-a", "(1/3) anfang", 1));
+  forward(frame("sess-a", "(2/5) anderes n", 2));
+  assert.deepEqual(written, ["[sess-a]: (1/3) anfang", "[sess-a]: (2/5) anderes n"]);
+});
+
+test("after (n/n) the next message is not suppressed", () => {
+  const written = [];
+  const forward = forwardToWriter((line) => written.push(line), { windowMs: 20 });
+  for (let i = 1; i <= 3; i++) forward(frame("sess-a", `(${i}/3) t${i}`, i));
+  forward(frame("sess-a", "danach", 4));
+  assert.deepEqual(written, [
+    "[sess-a]: (1/3) t1 [Nachricht in 3 Teilen -- get_message(seq=1)]",
+    "[sess-a]: danach",
+  ]);
+});
+
+test("the coalesced line keeps MAX_LINE_CHARS although the hint has priority", () => {
+  const written = [];
+  const forward = forwardToWriter((line) => written.push(line), { windowMs: 20 });
+  forward(frame("sess-a", `(1/2) ${"x".repeat(5000)}`, 42));
+  forward(frame("sess-a", "(2/2) ende", 43));
+  assert.equal(written.length, 1);
+  assert.ok(written[0].length <= MAX_LINE_CHARS, `line is ${written[0].length} chars (limit ${MAX_LINE_CHARS})`);
+  assert.match(written[0], /\[Nachricht in 2 Teilen -- get_message\(seq=42\)\]$/);
+  assert.ok(!written[0].includes("Zeichen --"), "the generic truncation marker competes with the hint");
+});
+
+test("the coalesced line keeps the attachment hint and the split hint together", () => {
+  const written = [];
+  const forward = forwardToWriter((line) => written.push(line), { windowMs: 20 });
+  forward(JSON.stringify({ from_session: "sess-a", text: `(1/2) ${"y".repeat(2000)}`, seq: 5, attachment_id: "att-1" }));
+  forward(JSON.stringify({ from_session: "sess-a", text: "(2/2) ende", seq: 6 }));
+  assert.equal(written.length, 1);
+  assert.ok(written[0].length <= MAX_LINE_CHARS, `line is ${written[0].length} chars (limit ${MAX_LINE_CHARS})`);
+  assert.match(written[0], /attachment_id=att-1 -- mit get_attachment abrufbar\] \[Nachricht in 2 Teilen/);
+  assert.match(written[0], /get_message\(seq=5\)/);
+});
+
+test("flush() releases a held head (session end loses nothing)", () => {
+  const written = [];
+  const forward = forwardToWriter((line) => written.push(line), { windowMs: 50 });
+  forward(frame("sess-a", "(1/4) anfang", 9));
+  assert.deepEqual(written, []);
+  forward.flush();
+  assert.deepEqual(written, ["[sess-a]: (1/4) anfang"]);
+});
+
+test("flush() without a held head writes nothing", () => {
+  const written = [];
+  const forward = forwardToWriter((line) => written.push(line), { windowMs: 50 });
+  forward.flush();
+  assert.deepEqual(written, []);
+});
+
+test("SPLIT_HOLD_MS is short enough not to read as a delay and long enough for a tight part run", () => {
+  assert.ok(SPLIT_HOLD_MS >= LINE_SPACING_MS, `SPLIT_HOLD_MS=${SPLIT_HOLD_MS} is below the line spacing`);
+  assert.ok(SPLIT_HOLD_MS <= 2000, `SPLIT_HOLD_MS=${SPLIT_HOLD_MS} would be a noticeable delay`);
 });
