@@ -15,6 +15,10 @@ SESSION_ID=$(printf '%s' "$INPUT" | grep -o '"session_id":"[^"]*"' | sed 's/"ses
 KWOS_DIR="$HOME/.kwos"
 FLAG="$KWOS_DIR/injected-$SESSION_ID"
 
+# EINE GEBUNDENE SITZUNG WIRD NICHT GEFRAGT: der Launcher setzt KWOS_WORKITEM, und die dauerhafte
+# Anweisung schliesst dort Rueckfrage und Aufruf aus. Der Hook draengte trotzdem darauf.
+[ -n "${KWOS_WORKITEM:-}" ] && exit 0
+
 # Already injected this session — exit immediately
 [ -f "$FLAG" ] && exit 0
 
