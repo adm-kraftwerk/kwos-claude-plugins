@@ -1,8 +1,8 @@
-# inject-session-id.ps1 — Claude Code UserPromptSubmit hook (Windows)
+# inject-session-id.ps1 - Claude Code UserPromptSubmit hook (Windows)
 #
 # Fires on the first user prompt of each session to inject the real Claude Code
 # session ID into the conversation via additionalContext. A flag file gates this
-# to a single injection per session — subsequent prompts exit in ~1ms.
+# to a single injection per session - subsequent prompts exit in ~1ms.
 #
 # This script is purely local: no network calls, no prompt content leaves the machine.
 
@@ -27,19 +27,19 @@ if ($env:KWOS_WORKITEM) { exit 0 }
 $kwosDir = Join-Path $env:USERPROFILE '.kwos'
 $flag    = Join-Path $kwosDir "injected-$sessionId"
 
-# Already injected this session — exit immediately
+# Already injected this session - exit immediately
 if (Test-Path $flag) { exit 0 }
 
 New-Item -ItemType Directory -Force -Path $kwosDir | Out-Null
 New-Item -ItemType File     -Force -Path $flag     | Out-Null
 
 # Output additionalContext for Claude
-# DERSELBE SATZ WIE AUF POSIX, WORTGLEICH. Die kuerzere Fassung („then call setSessionWorkitem")
+# DERSELBE SATZ WIE AUF POSIX, WORTGLEICH. Die kuerzere Fassung ("then call setSessionWorkitem")
 # war auf Windows nicht ausfuehrbar: mit ENABLE_TOOL_SEARCH=true ist setSessionWorkitem ein
 # DEFERRED MCP-Werkzeug -- ohne ToolSearch ist es nicht aufrufbar, und ohne den Verbots-Satz wich
-# der Agent auf Bash aus (kwos wi …), was die Regel ausdruecklich untersagt. Ergebnis: kein
+# der Agent auf Bash aus (kwos wi ...), was die Regel ausdruecklich untersagt. Ergebnis: kein
 # Workitem gesetzt, Arbeit nicht gebucht.
-$context = "[kraftwerkOS] Session ID: $sessionId. No workitem associated yet. Ask which kw/OS workitem the user is working on. Then use ToolSearch with query `"setSessionWorkitem`" to load the MCP tool schema, and call it with sessionId=`"$sessionId`" and their workitemId. Never use Bash or shell scripts to set the workitem — it is always a deferred MCP tool."
+$context = "[kraftwerkOS] Session ID: $sessionId. No workitem associated yet. Ask which kw/OS workitem the user is working on. Then use ToolSearch with query `"setSessionWorkitem`" to load the MCP tool schema, and call it with sessionId=`"$sessionId`" and their workitemId. Never use Bash or shell scripts to set the workitem - it is always a deferred MCP tool."
 
 @{
     hookSpecificOutput = @{
