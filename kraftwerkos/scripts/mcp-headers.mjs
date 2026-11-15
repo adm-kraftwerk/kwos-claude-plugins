@@ -56,10 +56,32 @@ const HELPER_TIMEOUT_MS = 20_000;
 
 const isWindows = platform() === "win32";
 
-/** The same path and the same overrides as the session bus: ONE vocabulary. */
-const helperPath =
-  process.env.KWOS_XID_TOKEN_HELPER_PATH ||
-  join(homedir(), ".config", "kraftwerk", isWindows ? "xiam-token.ps1" : "xiam-token.sh");
+/**
+ * The helper is looked for in the SAME places, in the SAME order, as the launcher does
+ * (`bootstrap/kwos.ps1`, `kwos-sync.ps1`): override -> per-user -> machine-wide -> Unix default.
+ *
+ * WHY THE LIST (measured in the fleet review, 2026-11-14): this file knew ONE path, the Unix one.
+ * A machine-scope install (Intune/SYSTEM, the fleet's managed clients) keeps the helper in
+ * `%ProgramData%\kraftwerk`, and a per-user Windows install keeps it in `%LOCALAPPDATA%\kraftwerk`
+ * — neither is `<home>/.config/kraftwerk`. On those machines the helper was never found, the plugin
+ * reported `{}` and exit 1, and Claude Code showed the kw/OS MCP server as not connected in EVERY
+ * session, with all its tools missing.
+ */
+function helperCandidates() {
+  const override = (process.env.KWOS_XID_TOKEN_HELPER_PATH || "").trim();
+  if (override !== "") return [override];
+  const name = isWindows ? "xiam-token.ps1" : "xiam-token.sh";
+  const dirs = [];
+  if (isWindows) {
+    if (process.env.LOCALAPPDATA) dirs.push(join(process.env.LOCALAPPDATA, "kraftwerk"));
+    if (process.env.ProgramData) dirs.push(join(process.env.ProgramData, "kraftwerk"));
+  }
+  dirs.push(join(homedir(), ".config", "kraftwerk"));
+  return dirs.map((dir) => join(dir, name));
+}
+
+const candidates = helperCandidates();
+const helperPath = candidates.find((path) => existsSync(path)) || candidates[0];
 
 function fail(reason) {
   process.stderr.write(`kraftwerkos/mcp-headers: ${reason}\n`);
@@ -70,7 +92,9 @@ function fail(reason) {
 function accessToken() {
   const override = (process.env.KWOS_XID_ACCESS_TOKEN || "").trim();
   if (override !== "") return override;
-  if (!existsSync(helperPath)) fail(`token helper not found: ${helperPath}`);
+  // EVERY place it was looked for, not just the first: a message naming one path sends the reader
+  // to a directory that may never have been intended.
+  if (!existsSync(helperPath)) fail(`token helper not found: ${candidates.join(", ")}`);
 
   const [command, args] = isWindows
     ? ["powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helperPath]]
