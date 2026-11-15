@@ -17,11 +17,10 @@
 // liefert die Notification, was Claude damit macht, entscheidet die jeweilige Session selbst
 // (Reaction Policy §2.3: wie User-Input behandeln, nicht blind ausführen).
 
+import { fileURLToPath } from "node:url";
 import { config, ensureSessionId, refreshSessionId } from "./config.js";
-import { isMainModule } from "./is-main.js";
 import { log } from "./log.js";
 import * as relay from "./relay-client.js";
-import { rememberSessionCursor, readSessionCursor } from "./sessionCursor.js";
 import { runSseReceiver } from "./sse-receiver.js";
 
 // Bild-Upload (WI 10460008, Phase 2): relay/lib.js serialize() liefert jetzt attachment_id mit
@@ -54,6 +53,14 @@ export const MAX_LINE_CHARS = 480;
 // SSE-Reconnect liefert der Relay bis zu 500 Backlog-Nachrichten in einer engen Schleife
 // (relay/server.js), das ist genau so ein Buendel.
 export const LINE_SPACING_MS = 250;
+
+// How long a "(1/n) " part is held before it is written on its own. The relay splits a long
+// message BEFORE it stores the parts (relay/lib.js splitLongMessage) and inserts them in one
+// loop, so the parts of one message arrive milliseconds apart; a second is generous and still
+// short enough not to be noticed as a delay. The spacing of LINE_SPACING_MS cannot help here:
+// the parts are written in one tight loop, so the harness bundles exactly them -- which is how
+// 5 of 12 lines disappeared in the measurement above.
+export const SPLIT_HOLD_MS = 1000;
 
 // Obergrenze fuer den Wiederholungsabstand nach einem Schreibfehler (Backoff verdoppelt von
 // LINE_SPACING_MS aus) -- ein dauerhaft kaputtes stdout soll nicht im Sekundenbruchteil
@@ -140,13 +147,140 @@ export function createLineWriter(stream, { spacingMs = LINE_SPACING_MS } = {}) {
 }
 
 /**
- * Verdrahtung SSE-Frame -> formatierte Zeile -> Writer. Eigene, exportierte Funktion, damit genau
- * diese Naht getestet werden kann: ohne sie laesst sich die Verdrahtung in main() zurueckdrehen
- * (direkt `process.stdout.write(formatLine(...))`), ohne dass ein Test rot wird -- und der stille
- * Totalverlust waere zurueck (Review-Fund F4 zu WI 11075502).
+ * One notification per logical message. The relay splits a long message into parts "(i/n) "
+ * before it stores them (relay/lib.js splitLongMessage), each part with its own seq -- so the
+ * monitor received a whole run of lines for ONE message. Lines written back to back are bundled
+ * by the harness and capped at 3000 characters, and the measurement at LINE_SPACING_MS lost 5 of
+ * 12 lines without a trace: of 6 parts, only part 1 arrived.
+ *
+ * So the head of a run is held for `windowMs` to learn whether parts follow; if they do, the head
+ * is written ONCE with a hint naming the seq that returns the whole message (get_message already
+ * reassembles the parts), and the rest of the run is suppressed up to "(n/n)". When the
+ * association is not certain -- a sender change, another n, a gap, or no head at all -- the part
+ * is written instead: swallowing something that cannot be assigned is the one thing worse than a
+ * second notification.
+ *
+ * `onWrite(rawData)` is called for a held head the moment the coalescer releases it (part 2
+ * arrived, the window elapsed, or flush()). Everything the caller should write is returned as
+ * `{action:"write", data}`; the caller formats both the same way. Return values: `write`, `hold`,
+ * `drop`.
  */
-export function forwardToWriter(writeLine) {
-  return (rawData) => writeLine(formatLine(rawData));
+export function createSplitCoalescer({ windowMs = SPLIT_HOLD_MS, onWrite = () => {} } = {}) {
+  // The held head of the current run, with the timer that will release it on its own.
+  let held = null;
+  // Parts of a run whose head was already written: dropped until "(n/n)" ends the run.
+  let suppressing = null;
+
+  function releaseHeld({ withHint = false } = {}) {
+    const current = held;
+    held = null;
+    if (!current) return;
+    if (current.timer) clearTimeout(current.timer);
+    onWrite(withHint ? withSplitHint(current) : current.raw);
+  }
+
+  function hold(part) {
+    const timer = setTimeout(() => {
+      // Only release what THIS timer was set for -- a later head may have replaced it.
+      if (held && held.timer === timer) releaseHeld();
+    }, windowMs);
+    // The window must never be a reason for the process to stay alive; the session's own end
+    // comes from the signal, and flush() covers a held line at that point.
+    timer.unref?.();
+    held = { ...part, timer };
+  }
+
+  function feed(rawData) {
+    const part = parseSplitPart(rawData);
+
+    if (held) {
+      const head = held;
+      if (part && part.from === head.from && part.total === head.total && part.index === 2) {
+        // Confirmed run: the one line goes out now, naming the head's seq.
+        releaseHeld({ withHint: true });
+        // "(2/2)" ends the run with this part; otherwise the parts still to come are dropped.
+        suppressing = head.total > 2 ? { from: head.from, total: head.total, next: 3 } : null;
+        return { action: "drop" };
+      }
+      // Not certainly the second part of the held head: release it as it is (its own "(1/n) "
+      // prefix still says there is more) and decide on this frame on its own.
+      releaseHeld();
+    }
+
+    if (suppressing) {
+      const run = suppressing;
+      if (part && part.from === run.from && part.total === run.total && part.index === run.next) {
+        run.next += 1;
+        if (run.next > run.total) suppressing = null;
+        return { action: "drop" };
+      }
+      // A gap or a different message: this part cannot be assigned to the run we know.
+      suppressing = null;
+    }
+
+    if (part && part.index === 1 && part.total > 1) {
+      hold(part);
+      return { action: "hold" };
+    }
+    // No head, no numbering, or a part that cannot be a head: written, never swallowed.
+    return { action: "write", data: rawData };
+  }
+
+  function flush() {
+    if (!held) return false;
+    releaseHeld();
+    return true;
+  }
+
+  return { feed, flush };
+}
+
+/** "(i/n) rest" -> { msg, from, index, total }; null when the frame is not a numbered part. */
+function parseSplitPart(rawData) {
+  let msg;
+  try {
+    msg = JSON.parse(rawData);
+  } catch {
+    return null;
+  }
+  const text = msg?.text;
+  const m = typeof text === "string" ? /^\((\d+)\/(\d+)\) ?/.exec(text) : null;
+  if (!m) return null;
+  const index = Number(m[1]);
+  const total = Number(m[2]);
+  // Same bounds as relay-client.js parseChunkMarker: a malformed numbering is not a part.
+  if (!Number.isInteger(index) || !Number.isInteger(total) || total < 2 || index < 1 || index > total) return null;
+  return { msg, raw: rawData, from: msg.from_session || "unknown", index, total };
+}
+
+/** The held head, carrying the hint that the rest is retrievable in one call. */
+function withSplitHint({ msg, total }) {
+  const hint = Number.isInteger(msg?.seq)
+    ? `[Nachricht in ${total} Teilen -- get_message(seq=${msg.seq})]`
+    : `[Nachricht in ${total} Teilen -- mit get_message nachholbar]`;
+  return JSON.stringify({ ...msg, split_hint: hint });
+}
+
+/**
+ * Verdrahtung SSE-Frame -> Coalescer -> formatierte Zeile -> Writer. Eigene, exportierte Funktion,
+ * damit genau diese Naht getestet werden kann: ohne sie laesst sich die Verdrahtung in main()
+ * zurueckdrehen (direkt `process.stdout.write(formatLine(...))`), ohne dass ein Test rot wird --
+ * und der stille Totalverlust waere zurueck (Review-Fund F4 zu WI 11075502).
+ *
+ * The coalescer is created HERE by default, so that every caller of this seam gets the one
+ * notification per message -- a wiring that could be forgotten in main() would be exactly the
+ * silent regression this function exists to prevent. `forward.flush()` releases a held head; the
+ * listener calls it before the writer's own flush drains the queue.
+ */
+export function forwardToWriter(writeLine, { windowMs = SPLIT_HOLD_MS, coalescer = null } = {}) {
+  const split = coalescer ?? createSplitCoalescer({ windowMs, onWrite: (raw) => writeLine(formatLine(raw)) });
+  const forward = (rawData) => {
+    const decision = split.feed(rawData);
+    if (decision.action === "write") writeLine(formatLine(decision.data));
+  };
+  // A held head is released here at session end -- nothing else would ever write it.
+  forward.flush = () => split.flush();
+  return forward;
 }
 
 export function formatLine(rawData) {
@@ -163,10 +297,21 @@ export function formatLine(rawData) {
     const hint = hasAttachment
       ? ` [Bild angehängt, attachment_id=${msg.attachment_id} -- mit get_attachment abrufbar]`
       : "";
+    // The split hint of a coalesced message (s. createSplitCoalescer) travels on the frame itself
+    // -- it is rendered here so that it is part of the character budget and cannot be cut off.
+    const extra = typeof msg.split_hint === "string" && msg.split_hint ? ` ${msg.split_hint}` : "";
     const prefix = `[${from}]: `;
 
-    if (prefix.length + text.length + hint.length <= MAX_LINE_CHARS) {
-      return `${prefix}${text}${hint}`;
+    if (prefix.length + text.length + hint.length + extra.length <= MAX_LINE_CHARS) {
+      return `${prefix}${text}${hint}${extra}`;
+    }
+
+    if (extra) {
+      // The split hint names the seq that returns the WHOLE message (get_message reassembles the
+      // parts), so it replaces the truncation marker instead of competing with it for the same
+      // 480 characters: "the hint has priority" is the rule of this fix.
+      const keep = Math.max(0, MAX_LINE_CHARS - prefix.length - hint.length - extra.length - 1);
+      return `${prefix}${text.slice(0, keep)}…${hint}${extra}`.slice(0, MAX_LINE_CHARS);
     }
 
     // Nur eine echte, ganzzahlige seq (relay/lib.js serialize(): seq = Number(row.seq)) ist
@@ -183,10 +328,10 @@ export function formatLine(rawData) {
 }
 
 // The relay receive path as a startable function: the ONE monitor process (server/monitor.js) runs
-// this, and the kwcollab receive path next to it. It stood here as a `main()` of its own until
-// 2026-10-19; the reason for the split is the fleet leak in collab-listen.js's header (WI 11506447):
-// a monitor cannot be started mid-session, so the one process that exists in every session has to
-// be the one that carries both paths.
+// this, and -- where the ring released the channel -- the kwcollab receive path next to it. It
+// stood here as a `main()` of its own until 2026-10-19; the reason for the split is the fleet leak
+// in collab-listen.js's header (WI 11506447): a monitor cannot be started mid-session, so the one
+// process that exists in every session has to be the one that carries both paths.
 //
 // `writeLine` is the caller's: both paths write to the same stdout, and two writers would each keep
 // their own spacing (s. createLineWriter) -- which is what the spacing is there to prevent.
@@ -201,23 +346,14 @@ export async function startRelayListener({ writeLine } = {}) {
   let stopping = false;
   let signalEnded;
   const ended = new Promise((resolve) => { signalEnded = resolve; });
-  // The row leaves the relay's list as the session ends, not when the relay ages it out. `ended`
-  // waits for the one attempt, so the process cannot exit before the request has gone out.
-  const stop = () => {
-    if (stopping) return;
-    stopping = true;
-    controller.abort();
-    relay.unregister()
-      .catch((err) => log.info("Abmeldung beim Relay nicht angekommen.", { error: String(err) }))
-      .finally(signalEnded);
-  };
+  const stop = () => { stopping = true; controller.abort(); signalEnded(); };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
-  // A closed PTY hangs the session up; without this handler the default action ends the process
-  // before the call can go out.
-  process.on("SIGHUP", stop);
 
   const out = writeLine ?? createLineWriter(process.stdout);
+  // One seam for both readers of the stream: the coalescer turns a split message into one line
+  // (s. createSplitCoalescer) before the writer's spacing is applied.
+  const forward = forwardToWriter(out);
 
   // `/clear` and `--resume` give this Claude Code process a NEW session id while this monitor keeps
   // running. The SessionStart hook rewrites our marker; nothing else would ever tell us, and a
@@ -251,17 +387,7 @@ export async function startRelayListener({ writeLine } = {}) {
   }, config.sessionIdCheckMs);
 
   function receive(ctrl) {
-    // WHERE THIS SESSION LEFT OFF, ON DISK (measured 2026-10-29). In memory the id only survives a
-    // reconnect; a new process (crash, sleep, --resume) started at zero, and the relay answers a
-    // cursorless connect with only what is still undelivered -- so a message whose frame had been
-    // written but not yet printed never came again. The relay has sent `id:` all along; this is the
-    // note that turns it into a resume.
-    const sessionId = config.sessionId;
-    runSseReceiver(forwardToWriter(out), {
-      signal: ctrl.signal,
-      since: readSessionCursor(sessionId),
-      onEventId: (id) => rememberSessionCursor(sessionId, id),
-    }).catch((err) => {
+    runSseReceiver(forward, { signal: ctrl.signal }).catch((err) => {
       // Only reachable for a failure the receiver itself does not swallow; its own reconnect loop
       // handles a dead stream. Worth a line, not a crash.
       if (!ctrl.signal.aborted) log.error("SSE-Empfang beendet.", { error: String(err) });
@@ -273,7 +399,13 @@ export async function startRelayListener({ writeLine } = {}) {
   // A monitor ends when its session ends, not when one stream ends -- a dropped stream is the
   // receiver's own business (it reconnects on its own). So the caller waits for the signal, not for
   // the stream; at that point the interval is gone. `flush()` stays with the writer's owner.
-  const running = ended.finally(() => clearInterval(watch));
+  //
+  // The held head of a split message goes out HERE, before `ended` resolves: the caller's
+  // `writeLine.flush()` then drains it with the rest, instead of it dying with the process.
+  const running = ended.finally(() => {
+    clearInterval(watch);
+    forward.flush();
+  });
   return { stop, ended: running };
 }
 
@@ -297,10 +429,10 @@ async function registerOrLog() {
   }
 }
 
-// Guard as in index.js: an `import` from a test must not open a real SSE connection or register
-// anything. Both paths are resolved first -- a symlinked plugin directory used to make this false
-// and let the process exit 0 in silence (WI 11550391). See server/is-main.js.
-if (isMainModule(import.meta.url)) {
+// Guard wie in index.js -- ein `import` aus einem Test soll nicht sofort eine echte
+// SSE-Verbindung/Registrierung auslösen.
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
   main().catch((err) => {
     log.error("Unerwarteter Fehler im Session-Bus-Listener.", { error: String(err) });
     process.exit(1);
