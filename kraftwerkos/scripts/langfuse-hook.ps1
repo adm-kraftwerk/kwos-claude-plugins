@@ -11,8 +11,12 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 # ── Read hook input from stdin ───────────────────────────────────────────────
 
+# UTF-8 EXPLIZIT: Windows PowerShell 5.1 liest [Console]::In mit der OEM-Codepage, Claude Code
+# schreibt UTF-8. Ein Profilpfad mit Umlaut (C:\Users\Jürgen\…) kam dann als Mojibake an, Test-Path
+# scheiterte und der Hook meldete Nullen -- ohne eine Fehlerzeile.
 try {
-    $raw   = [Console]::In.ReadToEnd()
+    $stdinReader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), (New-Object System.Text.UTF8Encoding($false)))
+    $raw   = $stdinReader.ReadToEnd()
     $hookInput = $raw | ConvertFrom-Json
 } catch {
     exit 0
@@ -35,8 +39,14 @@ $cacheReadTokens     = 0
 $model               = $null
 
 if ($hookInput.transcript_path -and (Test-Path $hookInput.transcript_path)) {
-    foreach ($line in (Get-Content -Path $hookInput.transcript_path -Encoding UTF8)) {
+    # GESTREAMT UND VORGEFILTERT (gemessen: 21 s und 1,4 GB RSS bei 291 MB, weil die Klammer um
+    # Get-Content die ganze Datei materialisierte und JEDE Zeile durch ConvertFrom-Json ging).
+    # ReadLines liest zeilenweise, und die billige Textpruefung ueberspringt alles, was kein
+    # Assistenten-Eintrag ist -- das ist die grosse Mehrheit der Zeilen.
+    $reader = [System.IO.File]::ReadLines($hookInput.transcript_path)
+    foreach ($line in $reader) {
         if (-not $line.Trim()) { continue }
+        if ($line -notmatch '"type"\s*:\s*"assistant"') { continue }
         try {
             $entry = $line | ConvertFrom-Json
             if ($entry.type -eq 'assistant' -and $entry.message -and $entry.message.usage) {
@@ -67,6 +77,14 @@ $payload = @{
 
 $headers = @{ 'Content-Type' = 'application/json' }
 if ($env:KWOS_HOOKS_SECRET) { $headers['X-Hook-Secret'] = $env:KWOS_HOOKS_SECRET }
+
+# TLS 1.2 VOR dem HTTPS-POST. Unter Windows PowerShell 5.1 mit .NET Framework < 4.7 ist der
+# Vorgabewert Ssl3|Tls; der Handshake scheitert dann, und der catch darunter verschluckt es --
+# der Client meldet gar keine Nutzung. Dieselben zwei Zeilen stehen in install.ps1,
+# install-windows.ps1, repair.ps1 und kwos-sync.ps1.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch { }
 
 try {
     Invoke-RestMethod `
