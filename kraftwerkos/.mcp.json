@@ -30,6 +30,11 @@
     "a2a": {
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/server/a2a-tool.mjs"]
+    },
+    "kwos-session-workitem": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/session-workitem.mjs"]
     }
   }
 }
