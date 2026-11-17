@@ -4,5 +4,7 @@
   "description": "Claude Code session tracking — traces token usage per workitem to Langfuse",
   "author": {
     "name": "S&P Solutions GmbH"
-  }
+  },
+  "license": "MIT",
+  "privacyPolicyUrl": "https://kraftwerk.io/datenschutzerklaerung/"
 }
