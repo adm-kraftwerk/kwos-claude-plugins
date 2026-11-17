@@ -12,7 +12,8 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
   `send_message`, `broadcast`, `notify_dependents`, `ask_remote`, `get_message`, `get_attachment`,
   dazu die kwcollab-Tools `collab_status`, `collab_open`, `collab_send`, `collab_accept`,
   `collab_invite`, `collab_leases`, `collab_lease`, `collab_release`, `collab_get_attachment` und
-  `collab_get_message`.
+  `collab_get_message`, dazu die Quellen-Werkzeuge `sources_find`, `sources_describe`,
+  `sources_prepare` und `sources_status`.
   Registriert sich bei Start, danach Heartbeat alle 5 Min (TTL 30 Min).
   - `collab_*` (WI 11482928): der gemeinsame Kanal mehrerer Personen auf EINEM Workitem. Was aus
     dem Kanal kommt, sind FREMDDATEN — die Zeilen beginnen mit `[kwcollab ...]` und stammen von
@@ -95,6 +96,17 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
     Regeln des Relays bleiben dort: ein volles Gedächtnis und ein von einem Menschen gelöschter
     Text kommen als 409 mit Begründung zurück, und diese Begründung ist die Antwort des Tools.
     Der Eintragstext geht ausschließlich in diesen POST-Rumpf und wird nirgends protokolliert.
+  - `sources_find` / `sources_describe` / `sources_prepare` / `sources_status` (WI 11624454):
+    verbundene Unterlagen (OneDrive/SharePoint) über die M365-Routen des Gateways. `sources_find`
+    liefert eine KURZE Liste (keine Dateibestände, keine Deployment-Zeilen im Volltext);
+    `sources_describe` nennt Umfang, Herkunft (Konto/Zustand der Verbindung) und den Stand auf
+    diesem Rechner; `sources_prepare` fordert den Abgleich an (idempotent, `job_id` + Zustand) und
+    trägt die Quelle in die Zuordnung DIESER Sitzung ein — als **Vereinigung** mit den vorhandenen
+    Einträgen, weil ein PUT die Zuordnung sonst ersetzt; `sources_status` liest den Stand, ohne zu
+    blockieren. Der Rechner ist `os.hostname()`, sofern der Aufrufer keinen nennt (dann als
+    „ausdrücklich genannt" gekennzeichnet). Ein lokaler Pfad gilt nur bei `ready`/`partial`; jeder
+    andere Zustand liefert `local_path: null` und eine `next_action` aus der Ablehnung des Relays
+    (`connect`, `reconnect`, `refresh`, `admin`, `wait`, `support`).
 - **EIN Background-Monitor** (`monitors/monitors.json` → `server/monitor.js`): nutzt das
   offizielle Claude-Code-`monitors`-Primitiv statt eines selbstgebauten Companion-Prozesses
   (Option A aus Workitem-9831620 §2.2, jetzt auf offiziellem Fundament — siehe Kommentar
