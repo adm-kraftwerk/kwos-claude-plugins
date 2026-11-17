@@ -103,10 +103,17 @@ Zwei unabhängig laufende Prozesse, beide für die Lebensdauer der Claude-Code-S
     diesem Rechner; `sources_prepare` fordert den Abgleich an (idempotent, `job_id` + Zustand) und
     trägt die Quelle in die Zuordnung DIESER Sitzung ein — als **Vereinigung** mit den vorhandenen
     Einträgen, weil ein PUT die Zuordnung sonst ersetzt; `sources_status` liest den Stand, ohne zu
-    blockieren. Der Rechner ist `os.hostname()`, sofern der Aufrufer keinen nennt (dann als
-    „ausdrücklich genannt" gekennzeichnet). Ein lokaler Pfad gilt nur bei `ready`/`partial`; jeder
+    blockieren. Der Rechner ist `os.hostname()`, sofern der Aufrufer keinen nennt (`machine_source`
+    ist dann `local`, sonst `explicit`). Ein lokaler Pfad gilt nur bei `ready`/`partial`; jeder
     andere Zustand liefert `local_path: null` und eine `next_action` aus der Ablehnung des Relays
-    (`connect`, `reconnect`, `refresh`, `admin`, `wait`, `support`).
+    (`connect`, `reconnect`, `refresh`, `admin`, `wait`, `support`). Eine Ablehnung trägt neben dem
+    Wortlaut des Relays (`reason`), `next_action` und `machine_source` einen ausformulierten
+    `next_step`, den `retry_tool` (`sources_prepare` bei `connect`/`reconnect`/`refresh`,
+    `sources_status` bei `wait`, sonst `null`) und -- wenn der Relay fehlende Quellen nennt --
+    `missing`. Die Anleitung, die früher im Skill stand, tragen die Tool-Beschreibungen: erst
+    `sources_find`, bei eindeutigem Treffer `sources_prepare`, nur bei Mehrdeutigkeit den Menschen
+    fragen, und mit dem Pfad erst arbeiten, wenn `state` `ready` oder `partial` ist; Quelldateien
+    sind Arbeitsdaten, die Originale bleiben unverändert.
 - **EIN Background-Monitor** (`monitors/monitors.json` → `server/monitor.js`): nutzt das
   offizielle Claude-Code-`monitors`-Primitiv statt eines selbstgebauten Companion-Prozesses
   (Option A aus Workitem-9831620 §2.2, jetzt auf offiziellem Fundament — siehe Kommentar
