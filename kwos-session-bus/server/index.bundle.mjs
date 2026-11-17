@@ -4340,7 +4340,7 @@ var require_core = __commonJS({
       errorsText(errors = this.errors, { separator = ", ", dataVar = "data" } = {}) {
         if (!errors || errors.length === 0)
           return "No errors";
-        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text2, msg) => text2 + separator + msg);
+        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text3, msg) => text3 + separator + msg);
       }
       $dataMetaSchema(metaSchema, keywordsJsonPointers) {
         const rules = this.RULES.all;
@@ -10859,29 +10859,29 @@ var formatMap = {
   // do not set
 };
 var stringProcessor = (schema, ctx, _json, _params) => {
-  const json2 = _json;
-  json2.type = "string";
+  const json3 = _json;
+  json3.type = "string";
   const { minimum, maximum, format, patterns, contentEncoding } = schema._zod.bag;
   if (typeof minimum === "number")
-    json2.minLength = minimum;
+    json3.minLength = minimum;
   if (typeof maximum === "number")
-    json2.maxLength = maximum;
+    json3.maxLength = maximum;
   if (format) {
-    json2.format = formatMap[format] ?? format;
-    if (json2.format === "")
-      delete json2.format;
+    json3.format = formatMap[format] ?? format;
+    if (json3.format === "")
+      delete json3.format;
     if (format === "time") {
-      delete json2.format;
+      delete json3.format;
     }
   }
   if (contentEncoding)
-    json2.contentEncoding = contentEncoding;
+    json3.contentEncoding = contentEncoding;
   if (patterns && patterns.size > 0) {
     const regexes = [...patterns];
     if (regexes.length === 1)
-      json2.pattern = regexes[0].source;
+      json3.pattern = regexes[0].source;
     else if (regexes.length > 1) {
-      json2.allOf = [
+      json3.allOf = [
         ...regexes.map((regex) => ({
           ...ctx.target === "draft-07" || ctx.target === "draft-04" || ctx.target === "openapi-3.0" ? { type: "string" } : {},
           pattern: regex.source
@@ -10891,65 +10891,65 @@ var stringProcessor = (schema, ctx, _json, _params) => {
   }
 };
 var numberProcessor = (schema, ctx, _json, _params) => {
-  const json2 = _json;
+  const json3 = _json;
   const { minimum, maximum, format, multipleOf, exclusiveMaximum, exclusiveMinimum } = schema._zod.bag;
   if (typeof format === "string" && format.includes("int"))
-    json2.type = "integer";
+    json3.type = "integer";
   else
-    json2.type = "number";
+    json3.type = "number";
   const exMin = typeof exclusiveMinimum === "number" && exclusiveMinimum >= (minimum ?? Number.NEGATIVE_INFINITY);
   const exMax = typeof exclusiveMaximum === "number" && exclusiveMaximum <= (maximum ?? Number.POSITIVE_INFINITY);
   const legacy = ctx.target === "draft-04" || ctx.target === "openapi-3.0";
   if (exMin) {
     if (legacy) {
-      json2.minimum = exclusiveMinimum;
-      json2.exclusiveMinimum = true;
+      json3.minimum = exclusiveMinimum;
+      json3.exclusiveMinimum = true;
     } else {
-      json2.exclusiveMinimum = exclusiveMinimum;
+      json3.exclusiveMinimum = exclusiveMinimum;
     }
   } else if (typeof minimum === "number") {
-    json2.minimum = minimum;
+    json3.minimum = minimum;
   }
   if (exMax) {
     if (legacy) {
-      json2.maximum = exclusiveMaximum;
-      json2.exclusiveMaximum = true;
+      json3.maximum = exclusiveMaximum;
+      json3.exclusiveMaximum = true;
     } else {
-      json2.exclusiveMaximum = exclusiveMaximum;
+      json3.exclusiveMaximum = exclusiveMaximum;
     }
   } else if (typeof maximum === "number") {
-    json2.maximum = maximum;
+    json3.maximum = maximum;
   }
   if (typeof multipleOf === "number")
-    json2.multipleOf = multipleOf;
+    json3.multipleOf = multipleOf;
 };
-var booleanProcessor = (_schema, _ctx, json2, _params) => {
-  json2.type = "boolean";
+var booleanProcessor = (_schema, _ctx, json3, _params) => {
+  json3.type = "boolean";
 };
-var nullProcessor = (_schema, ctx, json2, _params) => {
+var nullProcessor = (_schema, ctx, json3, _params) => {
   if (ctx.target === "openapi-3.0") {
-    json2.type = "string";
-    json2.nullable = true;
-    json2.enum = [null];
+    json3.type = "string";
+    json3.nullable = true;
+    json3.enum = [null];
   } else {
-    json2.type = "null";
+    json3.type = "null";
   }
 };
-var neverProcessor = (_schema, _ctx, json2, _params) => {
-  json2.not = {};
+var neverProcessor = (_schema, _ctx, json3, _params) => {
+  json3.not = {};
 };
 var unknownProcessor = (_schema, _ctx, _json, _params) => {
 };
-var enumProcessor = (schema, _ctx, json2, _params) => {
+var enumProcessor = (schema, _ctx, json3, _params) => {
   const def = schema._zod.def;
   const values = getEnumValues(def.entries);
   if (values.every((v) => typeof v === "number"))
-    json2.type = "number";
+    json3.type = "number";
   if (values.every((v) => typeof v === "string"))
-    json2.type = "string";
-  json2.enum = values;
+    json3.type = "string";
+  json3.enum = values;
 };
-var literalProcessor = (schema, ctx, json2, _params) => {
+var literalProcessor = (schema, ctx, json3, _params) => {
   const def = schema._zod.def;
   const vals = [];
   for (const val of def.values) {
@@ -10971,22 +10971,22 @@ var literalProcessor = (schema, ctx, json2, _params) => {
   if (vals.length === 0) {
   } else if (vals.length === 1) {
     const val = vals[0];
-    json2.type = val === null ? "null" : typeof val;
+    json3.type = val === null ? "null" : typeof val;
     if (ctx.target === "draft-04" || ctx.target === "openapi-3.0") {
-      json2.enum = [val];
+      json3.enum = [val];
     } else {
-      json2.const = val;
+      json3.const = val;
     }
   } else {
     if (vals.every((v) => typeof v === "number"))
-      json2.type = "number";
+      json3.type = "number";
     if (vals.every((v) => typeof v === "string"))
-      json2.type = "string";
+      json3.type = "string";
     if (vals.every((v) => typeof v === "boolean"))
-      json2.type = "boolean";
+      json3.type = "boolean";
     if (vals.every((v) => v === null))
-      json2.type = "null";
-    json2.enum = vals;
+      json3.type = "null";
+    json3.enum = vals;
   }
 };
 var customProcessor = (_schema, ctx, _json, _params) => {
@@ -11000,27 +11000,27 @@ var transformProcessor = (_schema, ctx, _json, _params) => {
   }
 };
 var arrayProcessor = (schema, ctx, _json, params) => {
-  const json2 = _json;
+  const json3 = _json;
   const def = schema._zod.def;
   const { minimum, maximum } = schema._zod.bag;
   if (typeof minimum === "number")
-    json2.minItems = minimum;
+    json3.minItems = minimum;
   if (typeof maximum === "number")
-    json2.maxItems = maximum;
-  json2.type = "array";
-  json2.items = process2(def.element, ctx, {
+    json3.maxItems = maximum;
+  json3.type = "array";
+  json3.items = process2(def.element, ctx, {
     ...params,
     path: [...params.path, "items"]
   });
 };
 var objectProcessor = (schema, ctx, _json, params) => {
-  const json2 = _json;
+  const json3 = _json;
   const def = schema._zod.def;
-  json2.type = "object";
-  json2.properties = {};
+  json3.type = "object";
+  json3.properties = {};
   const shape = def.shape;
   for (const key in shape) {
-    json2.properties[key] = process2(shape[key], ctx, {
+    json3.properties[key] = process2(shape[key], ctx, {
       ...params,
       path: [...params.path, "properties", key]
     });
@@ -11035,21 +11035,21 @@ var objectProcessor = (schema, ctx, _json, params) => {
     }
   }));
   if (requiredKeys.size > 0) {
-    json2.required = Array.from(requiredKeys);
+    json3.required = Array.from(requiredKeys);
   }
   if (def.catchall?._zod.def.type === "never") {
-    json2.additionalProperties = false;
+    json3.additionalProperties = false;
   } else if (!def.catchall) {
     if (ctx.io === "output")
-      json2.additionalProperties = false;
+      json3.additionalProperties = false;
   } else if (def.catchall) {
-    json2.additionalProperties = process2(def.catchall, ctx, {
+    json3.additionalProperties = process2(def.catchall, ctx, {
       ...params,
       path: [...params.path, "additionalProperties"]
     });
   }
 };
-var unionProcessor = (schema, ctx, json2, params) => {
+var unionProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   const isExclusive = def.inclusive === false;
   const options = def.options.map((x, i) => process2(x, ctx, {
@@ -11057,12 +11057,12 @@ var unionProcessor = (schema, ctx, json2, params) => {
     path: [...params.path, isExclusive ? "oneOf" : "anyOf", i]
   }));
   if (isExclusive) {
-    json2.oneOf = options;
+    json3.oneOf = options;
   } else {
-    json2.anyOf = options;
+    json3.anyOf = options;
   }
 };
-var intersectionProcessor = (schema, ctx, json2, params) => {
+var intersectionProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   const a = process2(def.left, ctx, {
     ...params,
@@ -11077,12 +11077,12 @@ var intersectionProcessor = (schema, ctx, json2, params) => {
     ...isSimpleIntersection(a) ? a.allOf : [a],
     ...isSimpleIntersection(b) ? b.allOf : [b]
   ];
-  json2.allOf = allOf;
+  json3.allOf = allOf;
 };
 var recordProcessor = (schema, ctx, _json, params) => {
-  const json2 = _json;
+  const json3 = _json;
   const def = schema._zod.def;
-  json2.type = "object";
+  json3.type = "object";
   const keyType = def.keyType;
   const keyBag = keyType._zod.bag;
   const patterns = keyBag?.patterns;
@@ -11091,18 +11091,18 @@ var recordProcessor = (schema, ctx, _json, params) => {
       ...params,
       path: [...params.path, "patternProperties", "*"]
     });
-    json2.patternProperties = {};
+    json3.patternProperties = {};
     for (const pattern of patterns) {
-      json2.patternProperties[pattern.source] = valueSchema;
+      json3.patternProperties[pattern.source] = valueSchema;
     }
   } else {
     if (ctx.target === "draft-07" || ctx.target === "draft-2020-12") {
-      json2.propertyNames = process2(def.keyType, ctx, {
+      json3.propertyNames = process2(def.keyType, ctx, {
         ...params,
         path: [...params.path, "propertyNames"]
       });
     }
-    json2.additionalProperties = process2(def.valueType, ctx, {
+    json3.additionalProperties = process2(def.valueType, ctx, {
       ...params,
       path: [...params.path, "additionalProperties"]
     });
@@ -11111,19 +11111,19 @@ var recordProcessor = (schema, ctx, _json, params) => {
   if (keyValues) {
     const validKeyValues = [...keyValues].filter((v) => typeof v === "string" || typeof v === "number");
     if (validKeyValues.length > 0) {
-      json2.required = validKeyValues;
+      json3.required = validKeyValues;
     }
   }
 };
-var nullableProcessor = (schema, ctx, json2, params) => {
+var nullableProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   const inner = process2(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   if (ctx.target === "openapi-3.0") {
     seen.ref = def.innerType;
-    json2.nullable = true;
+    json3.nullable = true;
   } else {
-    json2.anyOf = [inner, { type: "null" }];
+    json3.anyOf = [inner, { type: "null" }];
   }
 };
 var nonoptionalProcessor = (schema, ctx, _json, params) => {
@@ -11132,22 +11132,22 @@ var nonoptionalProcessor = (schema, ctx, _json, params) => {
   const seen = ctx.seen.get(schema);
   seen.ref = def.innerType;
 };
-var defaultProcessor = (schema, ctx, json2, params) => {
+var defaultProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   process2(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   seen.ref = def.innerType;
-  json2.default = JSON.parse(JSON.stringify(def.defaultValue));
+  json3.default = JSON.parse(JSON.stringify(def.defaultValue));
 };
-var prefaultProcessor = (schema, ctx, json2, params) => {
+var prefaultProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   process2(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   seen.ref = def.innerType;
   if (ctx.io === "input")
-    json2._prefault = JSON.parse(JSON.stringify(def.defaultValue));
+    json3._prefault = JSON.parse(JSON.stringify(def.defaultValue));
 };
-var catchProcessor = (schema, ctx, json2, params) => {
+var catchProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   process2(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
@@ -11158,7 +11158,7 @@ var catchProcessor = (schema, ctx, json2, params) => {
   } catch {
     throw new Error("Dynamic catch values are not supported in JSON Schema");
   }
-  json2.default = catchValue;
+  json3.default = catchValue;
 };
 var pipeProcessor = (schema, ctx, _json, params) => {
   const def = schema._zod.def;
@@ -11168,12 +11168,12 @@ var pipeProcessor = (schema, ctx, _json, params) => {
   const seen = ctx.seen.get(schema);
   seen.ref = innerType;
 };
-var readonlyProcessor = (schema, ctx, json2, params) => {
+var readonlyProcessor = (schema, ctx, json3, params) => {
   const def = schema._zod.def;
   process2(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   seen.ref = def.innerType;
-  json2.readOnly = true;
+  json3.readOnly = true;
 };
 var optionalProcessor = (schema, ctx, _json, params) => {
   const def = schema._zod.def;
@@ -11509,7 +11509,7 @@ var ZodType = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
 var _ZodString = /* @__PURE__ */ $constructor("_ZodString", (inst, def) => {
   $ZodString.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => stringProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => stringProcessor(inst, ctx, json3, params);
   const bag = inst._zod.bag;
   inst.format = bag.format ?? null;
   inst.minLength = bag.minimum ?? null;
@@ -11679,7 +11679,7 @@ var ZodJWT = /* @__PURE__ */ $constructor("ZodJWT", (inst, def) => {
 var ZodNumber = /* @__PURE__ */ $constructor("ZodNumber", (inst, def) => {
   $ZodNumber.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => numberProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => numberProcessor(inst, ctx, json3, params);
   _installLazyMethods(inst, "ZodNumber", {
     gt(value, params) {
       return this.check(_gt(value, params));
@@ -11747,7 +11747,7 @@ function int(params) {
 var ZodBoolean = /* @__PURE__ */ $constructor("ZodBoolean", (inst, def) => {
   $ZodBoolean.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => booleanProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => booleanProcessor(inst, ctx, json3, params);
 });
 function boolean2(params) {
   return _boolean(ZodBoolean, params);
@@ -11755,7 +11755,7 @@ function boolean2(params) {
 var ZodNull = /* @__PURE__ */ $constructor("ZodNull", (inst, def) => {
   $ZodNull.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => nullProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => nullProcessor(inst, ctx, json3, params);
 });
 function _null3(params) {
   return _null2(ZodNull, params);
@@ -11763,7 +11763,7 @@ function _null3(params) {
 var ZodUnknown = /* @__PURE__ */ $constructor("ZodUnknown", (inst, def) => {
   $ZodUnknown.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => unknownProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => unknownProcessor(inst, ctx, json3, params);
 });
 function unknown() {
   return _unknown(ZodUnknown);
@@ -11771,7 +11771,7 @@ function unknown() {
 var ZodNever = /* @__PURE__ */ $constructor("ZodNever", (inst, def) => {
   $ZodNever.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => neverProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => neverProcessor(inst, ctx, json3, params);
 });
 function never(params) {
   return _never(ZodNever, params);
@@ -11779,7 +11779,7 @@ function never(params) {
 var ZodArray = /* @__PURE__ */ $constructor("ZodArray", (inst, def) => {
   $ZodArray.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => arrayProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => arrayProcessor(inst, ctx, json3, params);
   inst.element = def.element;
   _installLazyMethods(inst, "ZodArray", {
     min(n, params) {
@@ -11805,7 +11805,7 @@ function array(element, params) {
 var ZodObject = /* @__PURE__ */ $constructor("ZodObject", (inst, def) => {
   $ZodObjectJIT.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => objectProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => objectProcessor(inst, ctx, json3, params);
   util_exports.defineLazy(inst, "shape", () => {
     return def.shape;
   });
@@ -11870,7 +11870,7 @@ function looseObject(shape, params) {
 var ZodUnion = /* @__PURE__ */ $constructor("ZodUnion", (inst, def) => {
   $ZodUnion.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => unionProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => unionProcessor(inst, ctx, json3, params);
   inst.options = def.options;
 });
 function union(options, params) {
@@ -11895,7 +11895,7 @@ function discriminatedUnion(discriminator, options, params) {
 var ZodIntersection = /* @__PURE__ */ $constructor("ZodIntersection", (inst, def) => {
   $ZodIntersection.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => intersectionProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => intersectionProcessor(inst, ctx, json3, params);
 });
 function intersection(left, right) {
   return new ZodIntersection({
@@ -11907,7 +11907,7 @@ function intersection(left, right) {
 var ZodRecord = /* @__PURE__ */ $constructor("ZodRecord", (inst, def) => {
   $ZodRecord.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => recordProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => recordProcessor(inst, ctx, json3, params);
   inst.keyType = def.keyType;
   inst.valueType = def.valueType;
 });
@@ -11930,7 +11930,7 @@ function record(keyType, valueType, params) {
 var ZodEnum = /* @__PURE__ */ $constructor("ZodEnum", (inst, def) => {
   $ZodEnum.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => enumProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => enumProcessor(inst, ctx, json3, params);
   inst.enum = def.entries;
   inst.options = Object.values(def.entries);
   const keys = new Set(Object.keys(def.entries));
@@ -11976,7 +11976,7 @@ function _enum(values, params) {
 var ZodLiteral = /* @__PURE__ */ $constructor("ZodLiteral", (inst, def) => {
   $ZodLiteral.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => literalProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => literalProcessor(inst, ctx, json3, params);
   inst.values = new Set(def.values);
   Object.defineProperty(inst, "value", {
     get() {
@@ -11997,7 +11997,7 @@ function literal(value, params) {
 var ZodTransform = /* @__PURE__ */ $constructor("ZodTransform", (inst, def) => {
   $ZodTransform.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => transformProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => transformProcessor(inst, ctx, json3, params);
   inst._zod.parse = (payload, _ctx) => {
     if (_ctx.direction === "backward") {
       throw new $ZodEncodeError(inst.constructor.name);
@@ -12037,7 +12037,7 @@ function transform(fn) {
 var ZodOptional = /* @__PURE__ */ $constructor("ZodOptional", (inst, def) => {
   $ZodOptional.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => optionalProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => optionalProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
 });
 function optional(innerType) {
@@ -12049,7 +12049,7 @@ function optional(innerType) {
 var ZodExactOptional = /* @__PURE__ */ $constructor("ZodExactOptional", (inst, def) => {
   $ZodExactOptional.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => optionalProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => optionalProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
 });
 function exactOptional(innerType) {
@@ -12061,7 +12061,7 @@ function exactOptional(innerType) {
 var ZodNullable = /* @__PURE__ */ $constructor("ZodNullable", (inst, def) => {
   $ZodNullable.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => nullableProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => nullableProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
 });
 function nullable(innerType) {
@@ -12073,7 +12073,7 @@ function nullable(innerType) {
 var ZodDefault = /* @__PURE__ */ $constructor("ZodDefault", (inst, def) => {
   $ZodDefault.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => defaultProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => defaultProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
   inst.removeDefault = inst.unwrap;
 });
@@ -12089,7 +12089,7 @@ function _default(innerType, defaultValue) {
 var ZodPrefault = /* @__PURE__ */ $constructor("ZodPrefault", (inst, def) => {
   $ZodPrefault.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => prefaultProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => prefaultProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
 });
 function prefault(innerType, defaultValue) {
@@ -12104,7 +12104,7 @@ function prefault(innerType, defaultValue) {
 var ZodNonOptional = /* @__PURE__ */ $constructor("ZodNonOptional", (inst, def) => {
   $ZodNonOptional.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => nonoptionalProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => nonoptionalProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
 });
 function nonoptional(innerType, params) {
@@ -12117,7 +12117,7 @@ function nonoptional(innerType, params) {
 var ZodCatch = /* @__PURE__ */ $constructor("ZodCatch", (inst, def) => {
   $ZodCatch.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => catchProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => catchProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
   inst.removeCatch = inst.unwrap;
 });
@@ -12131,7 +12131,7 @@ function _catch(innerType, catchValue) {
 var ZodPipe = /* @__PURE__ */ $constructor("ZodPipe", (inst, def) => {
   $ZodPipe.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => pipeProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => pipeProcessor(inst, ctx, json3, params);
   inst.in = def.in;
   inst.out = def.out;
 });
@@ -12150,7 +12150,7 @@ var ZodPreprocess = /* @__PURE__ */ $constructor("ZodPreprocess", (inst, def) =>
 var ZodReadonly = /* @__PURE__ */ $constructor("ZodReadonly", (inst, def) => {
   $ZodReadonly.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => readonlyProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => readonlyProcessor(inst, ctx, json3, params);
   inst.unwrap = () => inst._zod.def.innerType;
 });
 function readonly(innerType) {
@@ -12162,7 +12162,7 @@ function readonly(innerType) {
 var ZodCustom = /* @__PURE__ */ $constructor("ZodCustom", (inst, def) => {
   $ZodCustom.init(inst, def);
   ZodType.init(inst, def);
-  inst._zod.processJSONSchema = (ctx, json2, params) => customProcessor(inst, ctx, json2, params);
+  inst._zod.processJSONSchema = (ctx, json3, params) => customProcessor(inst, ctx, json3, params);
 });
 function custom(fn, _params) {
   return _custom(ZodCustom, fn ?? (() => true), _params);
@@ -13704,8 +13704,8 @@ var UrlElicitationRequiredError = class extends McpError {
 };
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/interfaces.js
-function isTerminal(status2) {
-  return status2 === "completed" || status2 === "failed" || status2 === "cancelled";
+function isTerminal(status3) {
+  return status3 === "completed" || status3 === "failed" || status3 === "cancelled";
 }
 
 // node_modules/zod-to-json-schema/dist/esm/parsers/string.js
@@ -14622,8 +14622,8 @@ var Protocol = class {
         }
         return task;
       },
-      storeTaskResult: async (taskId, status2, result) => {
-        await taskStore.storeTaskResult(taskId, status2, result, sessionId);
+      storeTaskResult: async (taskId, status3, result) => {
+        await taskStore.storeTaskResult(taskId, status3, result, sessionId);
         const task = await taskStore.getTask(taskId, sessionId);
         if (task) {
           const notification = TaskStatusNotificationSchema.parse({
@@ -14639,15 +14639,15 @@ var Protocol = class {
       getTaskResult: (taskId) => {
         return taskStore.getTaskResult(taskId, sessionId);
       },
-      updateTaskStatus: async (taskId, status2, statusMessage) => {
+      updateTaskStatus: async (taskId, status3, statusMessage) => {
         const task = await taskStore.getTask(taskId, sessionId);
         if (!task) {
           throw new McpError(ErrorCode.InvalidParams, `Task "${taskId}" not found - it may have been cleaned up`);
         }
         if (isTerminal(task.status)) {
-          throw new McpError(ErrorCode.InvalidParams, `Cannot update task "${taskId}" from terminal status "${task.status}" to "${status2}". Terminal states (completed, failed, cancelled) cannot transition to other states.`);
+          throw new McpError(ErrorCode.InvalidParams, `Cannot update task "${taskId}" from terminal status "${task.status}" to "${status3}". Terminal states (completed, failed, cancelled) cannot transition to other states.`);
         }
-        await taskStore.updateTaskStatus(taskId, status2, statusMessage, sessionId);
+        await taskStore.updateTaskStatus(taskId, status3, statusMessage, sessionId);
         const updatedTask = await taskStore.getTask(taskId, sessionId);
         if (updatedTask) {
           const notification = TaskStatusNotificationSchema.parse({
@@ -15470,8 +15470,8 @@ var StdioServerTransport = class {
   }
   send(message) {
     return new Promise((resolve) => {
-      const json2 = serializeMessage(message);
-      if (this._stdout.write(json2)) {
+      const json3 = serializeMessage(message);
+      if (this._stdout.write(json3)) {
         resolve();
       } else {
         this._stdout.once("drain", resolve);
@@ -15845,11 +15845,11 @@ async function call(path, { method = "GET", body, headers, timeoutMs } = {}) {
     ...timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}
   });
   if (!res.ok && res.status !== 202) {
-    const text2 = await res.text().catch(() => "");
-    let detail = text2;
+    const text3 = await res.text().catch(() => "");
+    let detail = text3;
     let parsed = null;
     try {
-      parsed = JSON.parse(text2);
+      parsed = JSON.parse(text3);
       if (parsed?.error) detail = parsed.holder ? `${parsed.error} (gehalten von ${parsed.holder})` : parsed.error;
     } catch {
     }
@@ -15880,23 +15880,23 @@ async function listSessions() {
     data ?? []
   );
 }
-async function sendMessage(target, text2, workitemRef) {
-  const { status: status2, queued } = await call(`/v1/sessions/${encodeURIComponent(target)}/messages`, {
+async function sendMessage(target, text3, workitemRef) {
+  const { status: status3, queued } = await call(`/v1/sessions/${encodeURIComponent(target)}/messages`, {
     method: "POST",
-    body: { from: config2.sessionId, text: text2, workitem_ref: workitemRef }
+    body: { from: config2.sessionId, text: text3, workitem_ref: workitemRef }
   });
-  return { delivered: status2 === 201, queued };
+  return { delivered: status3 === 201, queued };
 }
-async function broadcast(text2, workitemRef) {
+async function broadcast(text3, workitemRef) {
   await call("/v1/sessions/broadcast", {
     method: "POST",
-    body: { from: config2.sessionId, text: text2, workitem_ref: workitemRef }
+    body: { from: config2.sessionId, text: text3, workitem_ref: workitemRef }
   });
 }
-async function publishToChannel(channel, text2, workitemRef) {
+async function publishToChannel(channel, text3, workitemRef) {
   const { data } = await call(`/v1/channels/${encodeURIComponent(channel)}/publish`, {
     method: "POST",
-    body: { from: config2.sessionId, text: text2, workitem_ref: workitemRef }
+    body: { from: config2.sessionId, text: text3, workitem_ref: workitemRef }
   });
   return data ?? { channel, fanout: 0, results: [] };
 }
@@ -15941,13 +15941,13 @@ async function getMessage(seq) {
   }
   return assembleSplitRun(target, messages);
 }
-function parseChunkMarker(text2) {
-  const m = typeof text2 === "string" ? /^\((\d+)\/(\d+)\) ?/.exec(text2) : null;
+function parseChunkMarker(text3) {
+  const m = typeof text3 === "string" ? /^\((\d+)\/(\d+)\) ?/.exec(text3) : null;
   if (!m) return null;
   const index = Number(m[1]);
   const total = Number(m[2]);
   if (!Number.isInteger(index) || !Number.isInteger(total) || total < 2 || index < 1 || index > total) return null;
-  return { index, total, body: text2.slice(m[0].length) };
+  return { index, total, body: text3.slice(m[0].length) };
 }
 function assembleSplitRun(target, messages) {
   const first = parseChunkMarker(target.text);
@@ -15986,8 +15986,8 @@ async function getAttachment(id) {
     headers: { Authorization: `Bearer ${token}` }
   });
   if (!res.ok) {
-    const text2 = await res.text().catch(() => "");
-    throw new Error(`Relay GET /v1/attachments/${id} -> ${res.status}: ${text2}`);
+    const text3 = await res.text().catch(() => "");
+    throw new Error(`Relay GET /v1/attachments/${id} -> ${res.status}: ${text3}`);
   }
   const mimeType = res.headers.get("content-type") || "application/octet-stream";
   const buf = Buffer.from(await res.arrayBuffer());
@@ -16058,8 +16058,8 @@ async function gitText(cwd2, args, opts) {
   if (r.code !== 0) throw new Error(`git ${args[0]} failed (${r.code}): ${r.stderr.trim().split("\n").slice(-3).join(" ")}`);
   return r.stdout.toString("utf8").trim();
 }
-function parseGitVersion(text2) {
-  const m = /git version (\d+)\.(\d+)(?:\.(\d+))?/.exec(String(text2));
+function parseGitVersion(text3) {
+  const m = /git version (\d+)\.(\d+)(?:\.(\d+))?/.exec(String(text3));
   return m ? [Number(m[1]), Number(m[2]), Number(m[3] || 0)] : null;
 }
 async function checkGitVersion(cwd2) {
@@ -16169,8 +16169,8 @@ async function changedFiles(top, from, to) {
   const parts = ns.stdout.toString("utf8").split(NUL).filter((x) => x !== "");
   const files = /* @__PURE__ */ new Map();
   for (let i = 0; i + 1 < parts.length; i += 2) {
-    const status2 = parts[i][0];
-    files.set(parts[i + 1], { path: parts[i + 1], status: "AMDT".includes(status2) ? status2 : "M", add: null, del: null });
+    const status3 = parts[i][0];
+    files.set(parts[i + 1], { path: parts[i + 1], status: "AMDT".includes(status3) ? status3 : "M", add: null, del: null });
   }
   const nums = await git(top, ["diff", "--no-ext-diff", "--no-renames", "-z", "--numstat", from, to]);
   for (const rec of nums.stdout.toString("utf8").split(NUL)) {
@@ -16242,8 +16242,8 @@ async function findSecrets(top, from, to) {
     if (inHeader) continue;
     if (raw.startsWith("+") && path && left > 0) {
       left--;
-      const text2 = raw.slice(1);
-      if (SECRET_PATTERNS.some((re) => re.test(text2))) hits.push({ path, line, text: mask(text2).slice(0, 160) });
+      const text3 = raw.slice(1);
+      if (SECRET_PATTERNS.some((re) => re.test(text3))) hits.push({ path, line, text: mask(text3).slice(0, 160) });
       line++;
     }
   }
@@ -16290,13 +16290,13 @@ async function filesWithMarkers(top, paths) {
   const left = [];
   for (const p of paths) {
     const full = isAbsolute(p) ? p : join2(top, p);
-    let text2 = "";
+    let text3 = "";
     try {
-      text2 = readFileSync3(full, "utf8");
+      text3 = readFileSync3(full, "utf8");
     } catch {
       continue;
     }
-    if (/^<{7}( |$)/m.test(text2) && /^>{7}( |$)/m.test(text2)) left.push(p);
+    if (/^<{7}( |$)/m.test(text3) && /^>{7}( |$)/m.test(text3)) left.push(p);
   }
   return left;
 }
@@ -16461,12 +16461,12 @@ function normaliseRecipients(value) {
   if (!Array.isArray(value)) return [];
   return value.filter((x) => typeof x === "string" && x.trim() !== "").map((x) => x.trim().slice(0, 200)).slice(0, 50);
 }
-async function sendCollabMessage(collabId, text2, attachmentId = null, fromHuman = false, summary = null, meta2 = {}) {
+async function sendCollabMessage(collabId, text3, attachmentId = null, fromHuman = false, summary = null, meta2 = {}) {
   const brief = clampSummary(summary);
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/messages`, {
     method: "POST",
     body: {
-      text: text2 ?? "",
+      text: text3 ?? "",
       author_kind: fromHuman ? "human" : "claude",
       session_id: config2.sessionId,
       ...attachmentId ? { attachment_id: attachmentId } : {},
@@ -16487,8 +16487,8 @@ async function getCollabAttachment(collabId, attachmentId, { fetchImpl = fetch }
     { headers: { Authorization: `Bearer ${bearer}` } }
   );
   if (!res.ok) {
-    const text2 = await res.text().catch(() => "");
-    throw new Error(`Relay GET /v1/collabs/${collabId}/attachments/${attachmentId} -> ${res.status}: ${text2}`);
+    const text3 = await res.text().catch(() => "");
+    throw new Error(`Relay GET /v1/collabs/${collabId}/attachments/${attachmentId} -> ${res.status}: ${text3}`);
   }
   const mimeType = res.headers.get("content-type") || "application/octet-stream";
   const buf = Buffer.from(await res.arrayBuffer());
@@ -16547,10 +16547,10 @@ function resolveInvitee(people, query) {
   return { chosen: null, matches: exact.length > 1 ? exact : loose };
 }
 async function inviteToCollab(collabId, subject, note) {
-  const text2 = typeof note === "string" ? note.trim() : "";
+  const text3 = typeof note === "string" ? note.trim() : "";
   const { data } = await call(`/v1/collabs/${encodeURIComponent(collabId)}/invites`, {
     method: "POST",
-    body: { subject, ...text2 ? { note: text2.slice(0, 2e3) } : {}, via: "claude" }
+    body: { subject, ...text3 ? { note: text3.slice(0, 2e3) } : {}, via: "claude" }
   });
   return data ?? {};
 }
@@ -16969,22 +16969,22 @@ import { existsSync as existsSync4, mkdirSync as mkdirSync2, writeFileSync as wr
 import { join as join4 } from "node:path";
 var enc2 = encodeURIComponent;
 function relayAdapter({ relayUrl, getToken, fetchImpl = fetch }) {
-  async function request(method, path, { json: json2, raw, headers = {}, expect = "json" } = {}) {
+  async function request(method, path, { json: json3, raw, headers = {}, expect = "json" } = {}) {
     const token = await getToken();
     const res = await fetchImpl(`${relayUrl}${path}`, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
-        ...json2 !== void 0 ? { "Content-Type": "application/json" } : {},
+        ...json3 !== void 0 ? { "Content-Type": "application/json" } : {},
         ...headers
       },
-      body: json2 !== void 0 ? JSON.stringify(json2) : raw
+      body: json3 !== void 0 ? JSON.stringify(json3) : raw
     });
     if (!res.ok) {
-      const text2 = await res.text().catch(() => "");
-      let detail = text2;
+      const text3 = await res.text().catch(() => "");
+      let detail = text3;
       try {
-        const p = JSON.parse(text2);
+        const p = JSON.parse(text3);
         if (p?.error) detail = p.error;
       } catch {
       }
@@ -16998,8 +16998,8 @@ function relayAdapter({ relayUrl, getToken, fetchImpl = fetch }) {
   }
   return {
     get: (path) => request("GET", path),
-    post: (path, json2) => request("POST", path, { json: json2 }),
-    put: (path, json2) => request("PUT", path, { json: json2 }),
+    post: (path, json3) => request("POST", path, { json: json3 }),
+    put: (path, json3) => request("PUT", path, { json: json3 }),
     postRaw: (path, raw, headers) => request("POST", path, { raw, headers }),
     getRaw: (path) => request("GET", path, { expect: "raw" })
   };
@@ -17371,9 +17371,9 @@ async function readBotMemory(botId, { kind, query } = {}) {
   }
   return data;
 }
-async function addBotMemory(botId, { text: text2, kind, sessionId, workitem } = {}) {
+async function addBotMemory(botId, { text: text3, kind, sessionId, workitem } = {}) {
   const body = {
-    text: text2,
+    text: text3,
     source: "session",
     ...kind ? { kind } : {},
     ...sessionId ? { session_id: sessionId } : {},
@@ -17395,8 +17395,8 @@ function chosenKind(raw) {
 }
 function chosenQuery(raw) {
   if (raw === void 0 || raw === null) return void 0;
-  const text2 = String(raw).trim();
-  return text2 === "" ? void 0 : text2;
+  const text3 = String(raw).trim();
+  return text3 === "" ? void 0 : text3;
 }
 function scopeSuffix(kind, query) {
   const parts = [kind ? `kind=${kind}` : null, query ? `Suche "${query}"` : null].filter(Boolean);
@@ -17449,6 +17449,396 @@ async function handleBotMemoryTool(name, args = {}) {
     `Ged\xE4chtnis von Bot ${bot.bot_id}: ${count} Eintrag${count === 1 ? "" : "e"}${suffix}.
 ` + JSON.stringify(memory.entries, null, 2)
   );
+}
+
+// server/sourcesTools.js
+import { hostname } from "node:os";
+var USABLE_STATES = /* @__PURE__ */ new Set(["ready", "partial"]);
+var SOURCE_KINDS = ["onedrive", "sharepoint"];
+var MACHINE = {
+  type: "string",
+  description: "Optional: der Rechner, auf den sich die Frage bezieht. Ohne Angabe der eigene Rechner (os.hostname()). Nur setzen, wenn der Mensch ausdr\xFCcklich einen anderen Rechner nennt -- die Antwort kennzeichnet ihn dann als ausdr\xFCcklich genannt."
+};
+var SOURCE_ID = {
+  type: "string",
+  description: "source_id aus sources_find"
+};
+var SOURCES_TOOLS = [
+  {
+    name: "sources_find",
+    description: "Findet die verbundenen Unterlagen (OneDrive/SharePoint) dieses Menschen, die auf einem Rechner als Quelle eingerichtet sind. Kurze Liste mit source_id, Titel, Alias, Art, Pfad und dem Zustand der Microsoft-Verbindung -- KEINE Dateibest\xE4nde. Vor jedem Zugriff auf verbundene Unterlagen zuerst hier suchen; erst wenn kein eindeutiger Treffer bleibt, den Menschen fragen. Mit `query` wird \xFCber Titel, Alias, Pfad und source_id gesucht.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Suchtext (Teilzeichenkette, Gro\xDF-/Kleinschreibung egal)" },
+        kind: { type: "string", enum: SOURCE_KINDS, description: "Nur Quellen dieser Art" },
+        machine: MACHINE
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "sources_describe",
+    description: "Beschreibt EINE Quelle: Umfang (Pfad und was der Abgleich umfasst), Herkunft (Microsoft-Konto und Zustand der Verbindung) und den Stand auf diesem Rechner (Zustand, Fortschritt, lokaler Pfad). Der lokale Pfad ist nur bei `ready` oder `partial` verwendbar; sonst sagt die Antwort, was als N\xE4chstes zu tun ist.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        source_id: SOURCE_ID,
+        machine: MACHINE
+      },
+      required: ["source_id"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "sources_prepare",
+    description: "Macht eine Quelle f\xFCr DIESE Sitzung bereit: fordert einen Abgleich auf diesem Rechner an (idempotent) und tr\xE4gt die Quelle in die Zuordnung der Sitzung ein, ohne die dort schon eingetragenen Quellen zu verlieren. Der Aufruf wartet nicht auf den Abgleich -- er nennt job_id und Zustand, und sources_status sagt danach, wann der Pfad verwendbar ist. Erst nach `ready`/`partial` mit dem zur\xFCckgegebenen Pfad arbeiten.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        source_id: SOURCE_ID,
+        session_id: {
+          type: "string",
+          description: "Optional: Claude-Code-Sitzung, der die Quelle zugeordnet wird. Ohne Angabe die Sitzung dieses MCP-Servers (die einzige, die er sicher kennt)."
+        },
+        machine: MACHINE
+      },
+      required: ["source_id"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "sources_status",
+    description: "Liest den Stand einer Quelle auf diesem Rechner: Zustand, Fortschritt und den lokalen Pfad -- Letzteren nur bei `ready`/`partial`. Blockiert nicht und wartet nicht: wer den Abgleich angesto\xDFen hat, fragt hier sp\xE4ter erneut. `job_id` wird nur zur Zuordnung mitgegeben, die Antwort kommt aus dem Zustand der Quelle.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        job_id: { type: "string", description: "Optional: job_id aus sources_prepare (nur zur Zuordnung)" },
+        source_id: SOURCE_ID,
+        machine: MACHINE
+      },
+      required: ["source_id"],
+      additionalProperties: false
+    }
+  }
+];
+var SOURCES_TOOL_NAMES = new Set(SOURCES_TOOLS.map((t) => t.name));
+var text2 = (t) => ({ content: [{ type: "text", text: t }] });
+var json2 = (v) => text2(JSON.stringify(v, null, 2));
+function resolveMachine(raw) {
+  const explicit = typeof raw === "string" ? raw.trim() : "";
+  if (explicit !== "") return { machine: explicit, machineSource: "explicit" };
+  return { machine: hostname(), machineSource: "hostname" };
+}
+function deploymentOn(deployments, machine) {
+  return (Array.isArray(deployments) ? deployments : []).find((d) => d?.machine === machine) ?? null;
+}
+function stateOf(deployment) {
+  return deployment && typeof deployment.state === "string" ? deployment.state : "available";
+}
+var NEXT_STEP = {
+  connect: "Microsoft-Konto verbinden",
+  reconnect: "Verbindung erneuern",
+  refresh: "Abgleich erneut anfordern",
+  admin: "Administrator um Freigabe bitten",
+  wait: "Sp\xE4ter erneut versuchen",
+  support: "Angaben an den Support weitergeben"
+};
+function actionForState(state) {
+  switch (state) {
+    case "ready":
+      return null;
+    case "partial":
+      return { action: "refresh", next_step: "Stand ist unvollst\xE4ndig -- Abgleich erneut anfordern" };
+    case "queued":
+    case "syncing":
+    case "throttled":
+    case "offline":
+      return { action: "wait", next_step: NEXT_STEP.wait };
+    case "stale":
+    case "available":
+    case "error":
+      return { action: "refresh", next_step: NEXT_STEP.refresh };
+    case "access_denied":
+    case "revoked":
+      return { action: "reconnect", next_step: NEXT_STEP.reconnect };
+    default:
+      return { action: "support", next_step: NEXT_STEP.support };
+  }
+}
+function actionFromMessage(status3, message) {
+  const t = String(message ?? "").toLowerCase();
+  if (t.includes("connect a microsoft account") || t.includes("no access token")) return "connect";
+  if (t.includes("sites.read")) return "reconnect";
+  if (t.includes("reauth") || t.includes("not active") || status3 === 401) return "reconnect";
+  if (status3 === 404 || t.includes("no such source") || t.includes("no deployment on this machine")) return "refresh";
+  if (t.includes("no deployment") || t.includes("not usable on this machine")) return "refresh";
+  if (t.includes("not configured") || t.includes("kwos_relay_url")) return "admin";
+  if (status3 === 429 || status3 === 503 || typeof status3 === "number" && status3 >= 500) return "wait";
+  return "support";
+}
+function failure(err, extra = {}) {
+  const body = err && typeof err === "object" && err.body && typeof err.body === "object" ? err.body : null;
+  const status3 = typeof err?.status === "number" ? err.status : null;
+  const reason = body && typeof body.error === "string" ? body.error : String(err?.message ?? err);
+  const action = body && typeof body.action === "string" ? body.action : actionFromMessage(status3, reason);
+  const nextStep = body && typeof body.next_step === "string" ? body.next_step : NEXT_STEP[action] ?? null;
+  return {
+    ok: false,
+    reason,
+    next_action: { action, next_step: nextStep },
+    ...body && Array.isArray(body.missing) ? { missing: body.missing } : {},
+    ...extra
+  };
+}
+function sourcesPath(sourceId) {
+  return `/v1/m365/sources/${encodeURIComponent(sourceId)}`;
+}
+function statusPath(sourceId, machine) {
+  return `${sourcesPath(sourceId)}/status?machine=${encodeURIComponent(machine)}`;
+}
+function sessionSourcesPath(sessionId, machine) {
+  const base = `/v1/m365/sessions/${encodeURIComponent(sessionId)}/sources`;
+  return machine ? `${base}?machine=${encodeURIComponent(machine)}` : base;
+}
+function shortDeployment(deployment, machine) {
+  if (!deployment) return null;
+  return {
+    machine,
+    state: stateOf(deployment),
+    progress: deployment.progress ?? null,
+    local_path: USABLE_STATES.has(stateOf(deployment)) ? deployment.local_path ?? null : null,
+    generation: deployment.generation ?? null,
+    last_success_at: deployment.last_success_at ?? null,
+    error: deployment.error ?? null
+  };
+}
+async function find(args) {
+  const { machine, machineSource } = resolveMachine(args.machine);
+  const kind = typeof args.kind === "string" ? args.kind.trim() : "";
+  if (kind !== "" && !SOURCE_KINDS.includes(kind)) {
+    return {
+      ok: false,
+      reason: `Unbekannte Art "${kind}" -- erlaubt sind ${SOURCE_KINDS.join(", ")}.`,
+      next_action: { action: "support", next_step: NEXT_STEP.support },
+      machine,
+      machine_source: machineSource
+    };
+  }
+  const query = typeof args.query === "string" ? args.query.trim().toLowerCase() : "";
+  try {
+    const { data } = await call(`/v1/m365/sources?machine=${encodeURIComponent(machine)}`);
+    const rows = Array.isArray(data?.sources) ? data.sources : [];
+    const sources = rows.filter((s) => kind === "" ? true : s?.kind === kind).filter((s) => {
+      if (!query) return true;
+      return [s?.source_id, s?.title, s?.alias, s?.remote_path, s?.kind].some((v) => typeof v === "string" && v.toLowerCase().includes(query));
+    }).map((s) => {
+      const state = stateOf(deploymentOn(s?.deployments, machine));
+      return {
+        source_id: s?.source_id ?? null,
+        title: s?.title ?? "",
+        alias: s?.alias ?? "",
+        kind: s?.kind ?? null,
+        remote_path: s?.remote_path ?? null,
+        source_status: s?.connection_status ?? null,
+        state,
+        usable: USABLE_STATES.has(state)
+      };
+    });
+    return {
+      ok: true,
+      machine,
+      machine_source: machineSource,
+      // The relay's own counts for this machine, so the agent does not have to add them up.
+      summary: data?.summary ?? null,
+      sources,
+      ...sources.length === 0 ? { message: "Keine Quelle passt. Filter lockern -- oder, wenn noch keine Quelle eingerichtet ist, zuerst eine Microsoft-Verbindung herstellen." } : {}
+    };
+  } catch (err) {
+    return failure(err, { machine, machine_source: machineSource });
+  }
+}
+async function describe2(args) {
+  const { machine, machineSource } = resolveMachine(args.machine);
+  const sourceId = typeof args.source_id === "string" ? args.source_id.trim() : "";
+  if (sourceId === "") {
+    return {
+      ok: false,
+      reason: "source_id fehlt.",
+      next_action: { action: "refresh", next_step: "Mit sources_find die source_id holen" },
+      machine,
+      machine_source: machineSource
+    };
+  }
+  try {
+    const [{ data }, detail] = await Promise.all([
+      call(statusPath(sourceId, machine)),
+      call(sourcesPath(sourceId)).then(({ data: body }) => body?.source ?? null).catch(() => null)
+    ]);
+    const deployment = deploymentOn(data?.deployments, machine);
+    const state = stateOf(deployment);
+    const usable = USABLE_STATES.has(state);
+    return {
+      ok: true,
+      source_id: data?.source_id ?? sourceId,
+      title: data?.title ?? "",
+      kind: data?.kind ?? null,
+      machine,
+      machine_source: machineSource,
+      remote_path: data?.remote_path ?? detail?.remote_path ?? null,
+      scope_summary: deployment?.scope_summary ?? null,
+      connection_upn: data?.connection_upn ?? null,
+      connection_status: data?.connection_status ?? null,
+      // `deployments[]` as the task names it, narrowed to THIS machine: a detail panel open on
+      // "dieser Rechner" must not count a mirror that stands elsewhere.
+      deployments: deployment ? [shortDeployment(deployment, machine)] : [],
+      local_path: usable ? deployment?.local_path ?? null : null,
+      usable,
+      next_action: actionForState(state),
+      summary: data?.summary ?? null,
+      ...detail === null ? { remote_path_note: "Der Pfad war nicht abrufbar; Zustand und Umfang stammen aus der Status-Antwort." } : {}
+    };
+  } catch (err) {
+    return failure(err, { source_id: sourceId, machine, machine_source: machineSource });
+  }
+}
+async function prepare(args) {
+  const { machine, machineSource } = resolveMachine(args.machine);
+  const sourceId = typeof args.source_id === "string" ? args.source_id.trim() : "";
+  if (sourceId === "") {
+    return {
+      ok: false,
+      reason: "source_id fehlt.",
+      next_action: { action: "refresh", next_step: "Mit sources_find die source_id holen" },
+      machine,
+      machine_source: machineSource
+    };
+  }
+  let refreshed;
+  try {
+    const { data } = await call(`${sourcesPath(sourceId)}/refresh`, { method: "POST", body: { machine } });
+    refreshed = data ?? {};
+  } catch (err) {
+    return failure(err, { source_id: sourceId, machine, machine_source: machineSource });
+  }
+  const jobId = refreshed.job_id ?? null;
+  const refreshState = typeof refreshed.state === "string" ? refreshed.state : "queued";
+  const base = {
+    ok: true,
+    source_id: sourceId,
+    machine,
+    machine_source: machineSource,
+    job_id: jobId,
+    state: refreshState,
+    local_path: USABLE_STATES.has(refreshState) ? refreshed.local_path ?? null : null,
+    usable: USABLE_STATES.has(refreshState),
+    next_action: actionForState(refreshState)
+  };
+  const explicitSession = typeof args.session_id === "string" ? args.session_id.trim() : "";
+  const sessionId = explicitSession !== "" ? explicitSession : await ensureSessionId();
+  if (!sessionId) {
+    return {
+      ...base,
+      ok: false,
+      reason: "Keine Sitzung bekannt -- keine source_id kann zugeordnet werden.",
+      next_action: { action: "support", next_step: NEXT_STEP.support }
+    };
+  }
+  let existing;
+  try {
+    const { data } = await call(sessionSourcesPath(sessionId, machine));
+    existing = (Array.isArray(data?.sources) ? data.sources : []).map((s) => s?.source_id).filter((id) => typeof id === "string" && id !== "");
+  } catch (err) {
+    return {
+      ...failure(err, { source_id: sourceId, machine, machine_source: machineSource }),
+      session_id: sessionId,
+      job_id: jobId,
+      state: refreshState
+    };
+  }
+  const sourceIds = [.../* @__PURE__ */ new Set([...existing, sourceId])];
+  let assigned;
+  try {
+    const { data } = await call(sessionSourcesPath(sessionId), {
+      method: "PUT",
+      body: { source_ids: sourceIds, machine }
+    });
+    assigned = Array.isArray(data?.sources) ? data.sources : [];
+  } catch (err) {
+    return {
+      ...failure(err, { source_id: sourceId, machine, machine_source: machineSource }),
+      session_id: sessionId,
+      job_id: jobId,
+      state: refreshState
+    };
+  }
+  return {
+    ...base,
+    session_id: sessionId,
+    // Whether the session id came from the caller or from this process's own marker.
+    session_source: explicitSession !== "" ? "explicit" : "marker",
+    assigned: assigned.map((s) => ({
+      source_id: s?.source_id ?? null,
+      generation: s?.generation ?? null,
+      state: s?.state ?? null
+    }))
+  };
+}
+async function status2(args) {
+  const { machine, machineSource } = resolveMachine(args.machine);
+  const sourceId = typeof args.source_id === "string" ? args.source_id.trim() : "";
+  if (sourceId === "") {
+    return {
+      ok: false,
+      reason: "source_id fehlt.",
+      next_action: { action: "refresh", next_step: "Mit sources_find die source_id holen" },
+      machine,
+      machine_source: machineSource
+    };
+  }
+  const jobId = typeof args.job_id === "string" && args.job_id.trim() !== "" ? args.job_id.trim() : null;
+  try {
+    const { data } = await call(statusPath(sourceId, machine));
+    const deployment = deploymentOn(data?.deployments, machine);
+    const state = stateOf(deployment);
+    const usable = USABLE_STATES.has(state);
+    return {
+      ok: true,
+      source_id: data?.source_id ?? sourceId,
+      machine,
+      machine_source: machineSource,
+      ...jobId ? { job_id: jobId } : {},
+      state,
+      progress: deployment?.progress ?? null,
+      local_path: usable ? deployment?.local_path ?? null : null,
+      usable,
+      next_action: actionForState(state),
+      connection_upn: data?.connection_upn ?? null,
+      connection_status: data?.connection_status ?? null,
+      summary: data?.summary ?? null
+    };
+  } catch (err) {
+    return failure(err, {
+      source_id: sourceId,
+      machine,
+      machine_source: machineSource,
+      ...jobId ? { job_id: jobId } : {}
+    });
+  }
+}
+async function handleSourcesTool(name, args = {}) {
+  switch (name) {
+    case "sources_find":
+      return json2(await find(args));
+    case "sources_describe":
+      return json2(await describe2(args));
+    case "sources_prepare":
+      return json2(await prepare(args));
+    case "sources_status":
+      return json2(await status2(args));
+    default:
+      throw new Error(`Unbekanntes Tool: ${name}`);
+  }
 }
 
 // server/index.js
@@ -17761,10 +18151,13 @@ var TOOLS = [
   // Code exchange (WI 11517979): own file.
   ...CODE_TOOLS,
   // The bot's memory (WI 11605710): own file, one tool.
-  ...BOT_MEMORY_TOOLS
+  ...BOT_MEMORY_TOOLS,
+  // M365 sources (WI 11624454): own file, four tools. Always offered -- a gateway without a
+  // Microsoft app answers with the action `admin`, which is an honest answer, not a missing tool.
+  ...SOURCES_TOOLS
 ];
 var server = new Server(
-  { name: "kwos-session-bus", version: "0.9.12" },
+  { name: "kwos-session-bus", version: "0.9.14" },
   { capabilities: { tools: {} } }
 );
 var REMOTE_ONLY_TOOLS = /* @__PURE__ */ new Set(["ask_remote"]);
@@ -17780,18 +18173,18 @@ function visibleTools(env = process.env) {
 }
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: visibleTools() }));
 async function resolvePerson(query) {
-  const text2 = String(query ?? "").trim();
-  if (text2 === "") throw new Error("Wen einladen? `person` fehlt (Name oder Login).");
-  const found = resolveInvitee(await searchPeople(text2), text2);
+  const text3 = String(query ?? "").trim();
+  if (text3 === "") throw new Error("Wen einladen? `person` fehlt (Name oder Login).");
+  const found = resolveInvitee(await searchPeople(text3), text3);
   if (found.chosen) return found.chosen;
   const named = found.matches.slice(0, 5).map((p) => `${p.name} (${p.login})`).join(", ");
   if (found.matches.length > 1) {
     throw new Error(
-      `Mehrere Personen passen zu "${text2}": ${named}. Bitte den Login nennen -- rate nicht.`
+      `Mehrere Personen passen zu "${text3}": ${named}. Bitte den Login nennen -- rate nicht.`
     );
   }
   throw new Error(
-    named ? `Kein exakter Treffer f\xFCr "${text2}": ${named}. Bitte den Namen vollst\xE4ndig oder den Login nennen.` : `Niemand passt zu "${text2}". Der Kanal bietet nur Personen aus gemeinsamen Teams an.`
+    named ? `Kein exakter Treffer f\xFCr "${text3}": ${named}. Bitte den Namen vollst\xE4ndig oder den Login nennen.` : `Niemand passt zu "${text3}". Der Kanal bietet nur Personen aus gemeinsamen Teams an.`
   );
 }
 async function handleToolCall(name, args = {}) {
@@ -17800,16 +18193,17 @@ async function handleToolCall(name, args = {}) {
   }
   if (CODE_TOOL_NAMES.has(name)) return handleCodeTool(name, args);
   if (BOT_MEMORY_TOOL_NAMES.has(name)) return handleBotMemoryTool(name, args);
+  if (SOURCES_TOOL_NAMES.has(name)) return handleSourcesTool(name, args);
   switch (name) {
     case "list_sessions": {
       const sessions = await listSessions();
       return { content: [{ type: "text", text: JSON.stringify(sessions, null, 2) }] };
     }
     case "send_message": {
-      const { target, text: text2, workitem_ref } = args;
-      const result = await sendMessage(target, text2, workitem_ref);
-      const status2 = result.delivered ? "zugestellt" : "eingereiht (Zielsession offline)";
-      return { content: [{ type: "text", text: `Nachricht ${status2}.` }] };
+      const { target, text: text3, workitem_ref } = args;
+      const result = await sendMessage(target, text3, workitem_ref);
+      const status3 = result.delivered ? "zugestellt" : "eingereiht (Zielsession offline)";
+      return { content: [{ type: "text", text: `Nachricht ${status3}.` }] };
     }
     case "broadcast": {
       await broadcast(args.text, args.workitem_ref);
@@ -17825,8 +18219,8 @@ async function handleToolCall(name, args = {}) {
     case "ask_remote": {
       const { question, options } = args;
       const result = await askRemote(question, options);
-      const text2 = result.status === "answered" ? `Antwort erhalten: ${result.answer}` : "Keine Antwort erhalten (Zeitfenster abgelaufen). Bitte selbst sinnvoll entscheiden oder den Nutzer im Terminal direkt fragen.";
-      return { content: [{ type: "text", text: text2 }] };
+      const text3 = result.status === "answered" ? `Antwort erhalten: ${result.answer}` : "Keine Antwort erhalten (Zeitfenster abgelaufen). Bitte selbst sinnvoll entscheiden oder den Nutzer im Terminal direkt fragen.";
+      return { content: [{ type: "text", text: text3 }] };
     }
     case "get_message": {
       const msg = await getMessage(args.seq);

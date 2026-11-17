@@ -8,6 +8,7 @@ import * as relay from "./relay-client.js";
 import * as collab from "./collab.js";
 import { CODE_TOOLS, CODE_TOOL_NAMES, handleCodeTool } from "./codeTools.js";
 import { BOT_MEMORY_TOOLS, BOT_MEMORY_TOOL_NAMES, handleBotMemoryTool } from "./botMemory.js";
+import { SOURCES_TOOLS, SOURCES_TOOL_NAMES, handleSourcesTool } from "./sourcesTools.js";
 
 export const TOOLS = [
   {
@@ -439,13 +440,16 @@ export const TOOLS = [
   ...CODE_TOOLS,
   // The bot's memory (WI 11605710): own file, one tool.
   ...BOT_MEMORY_TOOLS,
+  // M365 sources (WI 11624454): own file, four tools. Always offered -- a gateway without a
+  // Microsoft app answers with the action `admin`, which is an honest answer, not a missing tool.
+  ...SOURCES_TOOLS,
 ];
 
 // The version the MCP client sees in the handshake. It names the SAME artifact as plugin.json /
 // marketplace.json, so it moves with them -- it had been left at 0.5.0 through the 0.5.1 bump,
 // and again at 0.9.2 through every bump up to 0.9.11 (found 2026-11-10 with the bot_memory bump).
 const server = new Server(
-  { name: "kwos-session-bus", version: "0.9.12" },
+  { name: "kwos-session-bus", version: "0.9.14" },
   { capabilities: { tools: {} } }
 );
 
@@ -532,6 +536,7 @@ export async function handleToolCall(name, args = {}) {
   }
   if (CODE_TOOL_NAMES.has(name)) return handleCodeTool(name, args);
   if (BOT_MEMORY_TOOL_NAMES.has(name)) return handleBotMemoryTool(name, args);
+  if (SOURCES_TOOL_NAMES.has(name)) return handleSourcesTool(name, args);
   switch (name) {
     case "list_sessions": {
       const sessions = await relay.listSessions();
