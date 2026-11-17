@@ -10,6 +10,9 @@
  *
  *   bots_list     GET /v1/bots              (eigene)   + GET /v1/me/managed-bots (Katalog)
  *   bot_trigger   POST /v1/bots/:bot/jobs   (idempotent ueber die mitgeschickte job_id)
+ *   bot_jobs      GET /v1/bots/:bot/jobs    (Zustand, ohne Ausgabe)
+ *   bot_job       GET /v1/bots/:bot/jobs/:job (ein Lauf MIT Ausgabe)
+ *   bot_cancel    POST /v1/bots/:bot/jobs/:job/cancel (anhaelt; ein beendeter Lauf nennt seinen Zustand)
  *
  * WER FRAGT: die PERSON. Der Token geht als `Bearer` an den Relay, dessen `auth` ihn gegen
  * `/oidc/me` prueft; `req.subject` ist damit die anfragende Person, und „nur eigene Bots" ist die
@@ -41,8 +44,9 @@
  */
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SERVER_NAME = "kwos-bots";
 const SERVER_VERSION = "1.0.0";
@@ -112,6 +116,63 @@ const TOOLS = [
         },
       },
       required: ["bot_id", "prompt"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bot_jobs",
+    description:
+      "Die Laeufe EINES Bots, die mir gehoeren (GET /v1/bots/:bot/jobs) -- der Zustand ohne den "
+      + "Umweg ueber die Oberflaeche. Die Liste enthaelt KEIN `output`; dafuer `bot_job`. "
+      + "Filter: `status`, `job_id`, `order` (oldest|newest), `limit`. Ein unbekannter Filter oder "
+      + "Status wird vom Relay abgelehnt und kommt woertlich zurueck.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        bot_id: { type: "string", description: "Die bot_id aus bots_list." },
+        status: {
+          type: "string",
+          description: "Nur Laeufe in diesem Zustand: pending, leased, done, failed, cancelled.",
+        },
+        job_id: { type: "string", description: "Genau diesen Lauf, auch wenn er aelter als die Seite ist." },
+        order: { type: "string", description: "oldest (Vorgabe) oder newest -- der Relay lehnt alles andere ab." },
+        limit: { type: "number", description: "Wie viele Zeilen (der Relay deckelt selbst)." },
+      },
+      required: ["bot_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bot_job",
+    description:
+      "EIN Lauf mit seinem Ergebnis (GET /v1/bots/:bot/jobs/:job): `status`, `output`, `last_error`. "
+      + "Der Weg, den `bot_trigger` als `result_hint` nennt. Nur eigene Laeufe -- ein fremder "
+      + "Job antwortet wie ein unbekannter.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        bot_id: { type: "string", description: "Die bot_id aus bots_list." },
+        job_id: { type: "string", description: "Die job_id aus bot_trigger oder bot_jobs." },
+      },
+      required: ["bot_id", "job_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "bot_cancel",
+    description:
+      "Einen Lauf anhalten (POST /v1/bots/:bot/jobs/:job/cancel). Nicht `failed`: niemand wollte den "
+      + "Lauf noch, und ein Fehlschlag waere eine falsche Schuldzuweisung. Ein schon beendeter Lauf "
+      + "ist kein Fehler -- die Antwort nennt seinen Zustand (`already: true`). Was der Lauf schon "
+      + "getan hat, nimmt niemand zurueck.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        bot_id: { type: "string", description: "Die bot_id aus bots_list." },
+        job_id: { type: "string", description: "Die job_id des Laufs." },
+        note: { type: "string", description: "Optionaler Grund, der am Lauf stehen bleibt." },
+      },
+      required: ["bot_id", "job_id"],
       additionalProperties: false,
     },
   },
@@ -301,16 +362,18 @@ function combineSignals(cancelSignal) {
   return timeout;
 }
 
-async function call(method, path, headers, body, cancelSignal) {
+async function call(method, path, headers, body, cancelSignal, deps = {}) {
   if (gateway.base === null) throw new CallError(gateway.problem);
 
   const sent = body === undefined
     ? { ...headers }
     : { ...headers, "content-type": "application/json" };
 
+  // DER TRANSPORT IST EINSPEISBAR, sonst nichts: Tests ersetzen `fetch`, nie die Regel.
+  const fetchImpl = deps.fetchImpl ?? fetch;
   let answer;
   try {
-    answer = await fetch(`${gateway.base}${path}`, {
+    answer = await fetchImpl(`${gateway.base}${path}`, {
       method,
       headers: sent,
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -363,9 +426,9 @@ function relayRefusal(where, answer, suffix = "") {
 }
 
 /** Ein Aufruf, der nicht werfen soll: das Ergebnis traegt entweder die Antwort oder den Grund. */
-async function attempt(method, path, headers, cancelSignal) {
+async function attempt(method, path, headers, cancelSignal, deps = {}) {
   try {
-    return { answer: await call(method, path, headers, undefined, cancelSignal) };
+    return { answer: await call(method, path, headers, undefined, cancelSignal, deps) };
   } catch (error) {
     return { error };
   }
@@ -385,10 +448,10 @@ function botRows(payload) {
   return payload.bots.filter(isObject);
 }
 
-async function botsList(headers, cancelSignal) {
+async function botsList(headers, cancelSignal, deps = {}) {
   const [ownTry, managedTry] = await Promise.all([
-    attempt("GET", "/v1/bots", headers, cancelSignal),
-    attempt("GET", "/v1/me/managed-bots", headers, cancelSignal),
+    attempt("GET", "/v1/bots", headers, cancelSignal, deps),
+    attempt("GET", "/v1/me/managed-bots", headers, cancelSignal, deps),
   ]);
 
   // 401/403 sind keine halbe Liste wert: ohne Person gibt es nichts zu lesen.
@@ -493,14 +556,14 @@ function triggerRequest(args) {
   return { botId, jobId, body };
 }
 
-async function botTrigger(request, headers, cancelSignal) {
+async function botTrigger(request, headers, cancelSignal, deps = {}) {
   const { botId, jobId, body } = request;
   const path = `/v1/bots/${encodeURIComponent(botId)}/jobs`;
   const resultHint = `Das Ergebnis steht später an GET /v1/bots/${botId}/jobs/${jobId} (output).`;
 
   let answer;
   try {
-    answer = await call("POST", path, headers, body, cancelSignal);
+    answer = await call("POST", path, headers, body, cancelSignal, deps);
   } catch (error) {
     const reason = error instanceof CallError
       ? error.message
@@ -553,17 +616,121 @@ async function botTrigger(request, headers, cancelSignal) {
   }, null, 2));
 }
 
-async function callTool(name, args, cancelSignal) {
+/** Eine Kennung aus den Argumenten, geprueft bevor sie in einen Pfad wandert. */
+function idArg(tool, args, key) {
+  const value = args?.[key];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new ProtocolError(-32602, `${tool} braucht \`${key}\` (aus bots_list bzw. bot_trigger).`);
+  }
+  const id = value.trim();
+  if (!ID_PATTERN.test(id)) {
+    throw new ProtocolError(-32602, `${tool}: \`${key}\` hat ein unzaelaessiges Format (erlaubt: [A-Za-z0-9] am Anfang, danach [A-Za-z0-9._-], hoechstens 200 Zeichen).`);
+  }
+  return id;
+}
+
+/** Die Abfrage der Lauf-Liste, als Query gebaut -- ein Wert, der nicht passt, wird nicht geraten. */
+function jobsQuery(args) {
+  const query = new URLSearchParams();
+  for (const key of ["status", "job_id", "order"]) {
+    const value = args?.[key];
+    if (value === undefined) continue;
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new ProtocolError(-32602, `bot_jobs: \`${key}\` muss ein nicht-leerer String sein.`);
+    }
+    query.set(key, value.trim());
+  }
+  if (args?.limit !== undefined) {
+    if (!Number.isInteger(args.limit) || args.limit <= 0) {
+      throw new ProtocolError(-32602, "bot_jobs: `limit` muss eine ganze Zahl groesser 0 sein.");
+    }
+    query.set("limit", String(args.limit));
+  }
+  const text = query.toString();
+  return text === "" ? "" : `?${text}`;
+}
+
+/** Eine Antwort, die ein Array traegt, unveraendert weitergeben; sonst der Rumpf als Text. */
+function payloadText(answer) {
+  const body = isObject(answer.body) ? answer.body : null;
+  if (body === null) {
+    return snippet(typeof answer.raw === "string" ? answer.raw : "");
+  }
+  return JSON.stringify(body, null, 2);
+}
+
+async function botJobs(args, headers, cancelSignal, deps = {}) {
+  const botId = idArg("bot_jobs", args, "bot_id");
+  const path = `/v1/bots/${encodeURIComponent(botId)}/jobs${jobsQuery(args)}`;
+  const answer = await call("GET", path, headers, undefined, cancelSignal, deps);
+  if (!answer.ok) return relayRefusal("die Laeufe", answer);
+  return toolResult(payloadText(answer));
+}
+
+async function botJob(args, headers, cancelSignal, deps = {}) {
+  const botId = idArg("bot_job", args, "bot_id");
+  const jobId = idArg("bot_job", args, "job_id");
+  const path = `/v1/bots/${encodeURIComponent(botId)}/jobs/${encodeURIComponent(jobId)}`;
+  const answer = await call("GET", path, headers, undefined, cancelSignal, deps);
+  if (!answer.ok) return relayRefusal("der Lauf", answer);
+  return toolResult(payloadText(answer));
+}
+
+async function botCancel(args, headers, cancelSignal, deps = {}) {
+  const botId = idArg("bot_cancel", args, "bot_id");
+  const jobId = idArg("bot_cancel", args, "job_id");
+  const body = {};
+  if (args?.note !== undefined) {
+    if (typeof args.note !== "string") {
+      throw new ProtocolError(-32602, "bot_cancel: `note` muss ein String sein.");
+    }
+    if (args.note.trim() !== "") body.note = args.note.trim();
+  }
+  const path = `/v1/bots/${encodeURIComponent(botId)}/jobs/${encodeURIComponent(jobId)}/cancel`;
+  const answer = await call("POST", path, headers, body, cancelSignal, deps);
+  if (!answer.ok) return relayRefusal("das Anhalten", answer);
+  const payload = isObject(answer.body) ? answer.body : null;
+  const already = payload?.already === true;
+  return toolResult(JSON.stringify({
+    ok: payload?.ok !== false,
+    already,
+    line: already
+      ? "Der Lauf war schon zu Ende -- kein zweiter Abbruch, sondern sein Zustand."
+      : "Der Lauf ist angehalten. Was er schon getan hat, bleibt getan.",
+    job: isObject(payload?.job) ? payload.job : null,
+  }, null, 2));
+}
+
+async function callTool(name, args, cancelSignal, deps = {}) {
+  /** Der Personen-Kopf: im Betrieb vom Helfer, im Test eingespeist -- die Route bleibt dieselbe. */
+  const head = async () => deps.headers ?? await buildHeaders();
   if (name === "bots_list") {
     if (args !== undefined && (!isObject(args) || Object.keys(args).length > 0)) {
       throw new ProtocolError(-32602, "bots_list nimmt keine Argumente.");
     }
-    return await botsList(await buildHeaders(), cancelSignal);
+    return await botsList(await head(), cancelSignal, deps);
   }
   if (name === "bot_trigger") {
     // Argumente zuerst: ein ungueltiger Aufruf startet keinen Header-Helfer.
     const request = triggerRequest(args);
-    return await botTrigger(request, await buildHeaders(), cancelSignal);
+    return await botTrigger(request, await head(), cancelSignal, deps);
+  }
+  if (name === "bot_jobs" || name === "bot_job" || name === "bot_cancel") {
+    // Dieselbe Reihenfolge: erst die Argumente pruefen, dann den Personen-Token holen.
+    if (name === "bot_jobs") {
+      idArg(name, args, "bot_id");
+      jobsQuery(args);
+    } else {
+      idArg(name, args, "bot_id");
+      idArg(name, args, "job_id");
+      if (name === "bot_cancel" && args?.note !== undefined && typeof args.note !== "string") {
+        throw new ProtocolError(-32602, "bot_cancel: `note` muss ein String sein.");
+      }
+    }
+    const headers = await head();
+    if (name === "bot_jobs") return await botJobs(args, headers, cancelSignal, deps);
+    if (name === "bot_job") return await botJob(args, headers, cancelSignal, deps);
+    return await botCancel(args, headers, cancelSignal, deps);
   }
   throw new ProtocolError(-32602, `unbekanntes Werkzeug: ${String(name)}`);
 }
@@ -668,7 +835,18 @@ async function handleEntry(message) {
   return await handleRequest(message);
 }
 
-const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+let lines = null;
+
+function startServer() {
+  lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  lines.on("line", (line) => {
+    void handleLine(line);
+  });
+  process.stdin.on("end", () => {
+    closing = true;
+    drain();
+  });
+}
 
 /**
  * Ein laufender Aufruf haelt den Prozess am Leben.
@@ -686,7 +864,7 @@ let closing = false;
 let finished = false;
 
 function drain() {
-  if (finished || !closing || pending > 0) return;
+  if (finished || !closing || pending > 0 || lines === null) return;
   finished = true;
   process.exitCode = 0;
   lines.close();
@@ -719,11 +897,18 @@ async function handleLine(line) {
   if (answer !== null) send(answer);
 }
 
-lines.on("line", (line) => {
-  void handleLine(line);
-});
+/**
+ * NUR BEIM DIREKTSTART LAUSCHEN (WI 11619349). Wird das Modul importiert (Tests), darf es nicht
+ * auf stdin warten -- sonst haengt der Testlauf an einem Prozess, der auf Eingaben wartet.
+ */
+const invokedDirectly = (() => {
+  try {
+    return import.meta.url === pathToFileURL(process.argv[1] ?? "").href || !existsSync(process.argv[1] ?? "");
+  } catch {
+    return false;
+  }
+})();
 
-process.stdin.on("end", () => {
-  closing = true;
-  drain();
-});
+export { TOOLS, callTool };
+
+if (invokedDirectly) startServer();
