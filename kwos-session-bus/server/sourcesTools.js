@@ -48,11 +48,12 @@ export const SOURCES_TOOLS = [
   {
     name: "sources_find",
     description:
-      "Findet die verbundenen Unterlagen (OneDrive/SharePoint) dieses Menschen, die auf einem " +
-      "Rechner als Quelle eingerichtet sind. Kurze Liste mit source_id, Titel, Alias, Art, Pfad " +
-      "und dem Zustand der Microsoft-Verbindung -- KEINE Dateibestände. Vor jedem Zugriff auf " +
-      "verbundene Unterlagen zuerst hier suchen; erst wenn kein eindeutiger Treffer bleibt, den " +
-      "Menschen fragen. Mit `query` wird über Titel, Alias, Pfad und source_id gesucht.",
+      "Findet die verbundenen Unterlagen (OneDrive/SharePoint) dieses Menschen auf einem Rechner: " +
+      "kurze Liste mit source_id, Titel, Alias, Art, Pfad und Zustand der Microsoft-Verbindung -- " +
+      "KEINE Dateibestände. Vor jedem Zugriff auf verbundene Unterlagen zuerst hier suchen, mit " +
+      "`query` über Titel, Alias, Pfad und source_id. Ein eindeutiger Treffer geht mit " +
+      "sources_prepare weiter; erst bei mehreren Treffern den Menschen fragen. Quelldateien sind " +
+      "Arbeitsdaten -- die Originale bei Microsoft bleiben unverändert.",
     inputSchema: {
       type: "object",
       properties: {
@@ -68,8 +69,10 @@ export const SOURCES_TOOLS = [
     description:
       "Beschreibt EINE Quelle: Umfang (Pfad und was der Abgleich umfasst), Herkunft (Microsoft-" +
       "Konto und Zustand der Verbindung) und den Stand auf diesem Rechner (Zustand, Fortschritt, " +
-      "lokaler Pfad). Der lokale Pfad ist nur bei `ready` oder `partial` verwendbar; sonst sagt " +
-      "die Antwort, was als Nächstes zu tun ist.",
+      "lokaler Pfad). Nach sources_find, wenn Herkunft oder Umfang für die Auswahl zählt; die " +
+      "source_id kommt von dort. `local_path` ist nur bei `ready` oder `partial` verwendbar, jeder " +
+      "andere Zustand nennt die Lücke und den nächsten Schritt. Einen unvollständigen oder " +
+      "veralteten Stand (`partial`, `stale`) vor dem Lesen nennen.",
     inputSchema: {
       type: "object",
       properties: {
@@ -84,10 +87,12 @@ export const SOURCES_TOOLS = [
     name: "sources_prepare",
     description:
       "Macht eine Quelle für DIESE Sitzung bereit: fordert einen Abgleich auf diesem Rechner an " +
-      "(idempotent) und trägt die Quelle in die Zuordnung der Sitzung ein, ohne die dort schon " +
-      "eingetragenen Quellen zu verlieren. Der Aufruf wartet nicht auf den Abgleich -- er nennt " +
-      "job_id und Zustand, und sources_status sagt danach, wann der Pfad verwendbar ist. Erst " +
-      "nach `ready`/`partial` mit dem zurückgegebenen Pfad arbeiten.",
+      "(idempotent) und trägt die Quelle in die Zuordnung der Sitzung ein, ohne schon eingetragene " +
+      "Quellen zu verlieren. Der Weg von einem eindeutigen sources_find-Treffer zum lesbaren Pfad -- " +
+      "bei mehreren Treffern zuerst den Menschen fragen. Antwortet mit job_id und `state`, wartet " +
+      "aber nicht auf den Abgleich; sources_status sagt danach, ob der Pfad verwendbar ist. Erst " +
+      "nach `ready`/`partial` mit dem zurückgegebenen Pfad arbeiten und bei `partial` die Lücke " +
+      "nennen; Quelldateien sind Arbeitsdaten, die Originale bleiben unverändert.",
     inputSchema: {
       type: "object",
       properties: {
@@ -108,9 +113,11 @@ export const SOURCES_TOOLS = [
     name: "sources_status",
     description:
       "Liest den Stand einer Quelle auf diesem Rechner: Zustand, Fortschritt und den lokalen " +
-      "Pfad -- Letzteren nur bei `ready`/`partial`. Blockiert nicht und wartet nicht: wer den " +
-      "Abgleich angestoßen hat, fragt hier später erneut. `job_id` wird nur zur Zuordnung " +
-      "mitgegeben, die Antwort kommt aus dem Zustand der Quelle.",
+      "Pfad -- Letzteren nur bei `ready`/`partial`. Nach sources_prepare oder bei jedem Zweifel am " +
+      "Stand aufrufen; blockiert nicht und wartet nicht, also später erneut fragen. Nennt " +
+      "`next_action`, wenn ein Schritt nötig ist (Verbindung erneuern, Abgleich anfordern, warten). " +
+      "Erst mit dem Pfad arbeiten, wenn `state` `ready` oder `partial` ist; `partial` und `stale` " +
+      "vor dem Lesen als Lücke nennen.",
     inputSchema: {
       type: "object",
       properties: {
@@ -137,7 +144,7 @@ const json = (v) => text(JSON.stringify(v, null, 2));
 function resolveMachine(raw) {
   const explicit = typeof raw === "string" ? raw.trim() : "";
   if (explicit !== "") return { machine: explicit, machineSource: "explicit" };
-  return { machine: hostname(), machineSource: "hostname" };
+  return { machine: hostname(), machineSource: "local" };
 }
 
 /** The deployment row for THIS machine, or null when nothing was mirrored here yet. */
@@ -160,6 +167,16 @@ const NEXT_STEP = {
   support: "Angaben an den Support weitergeben",
 };
 
+/** The tool that helps after an action; `null` where no tool can. */
+const RETRY_TOOL = {
+  connect: "sources_prepare",
+  reconnect: "sources_prepare",
+  refresh: "sources_prepare",
+  wait: "sources_status",
+  admin: null,
+  support: null,
+};
+
 function actionForState(state) {
   switch (state) {
     case "ready":
@@ -169,13 +186,20 @@ function actionForState(state) {
       return { action: "refresh", next_step: "Stand ist unvollständig -- Abgleich erneut anfordern" };
     case "queued":
     case "syncing":
+      return { action: "wait", next_step: "Der Abgleich läuft -- mit sources_status später erneut fragen" };
     case "throttled":
+      return { action: "wait", next_step: "Microsoft drosselt den Abgleich -- mit sources_status später erneut fragen" };
     case "offline":
-      return { action: "wait", next_step: NEXT_STEP.wait };
+      return {
+        action: "wait",
+        next_step: "Der Rechner gilt als offline -- sobald er wieder erreichbar ist, mit sources_status erneut fragen",
+      };
     case "stale":
+      return { action: "refresh", next_step: "Stand ist veraltet -- Abgleich erneut anfordern" };
     case "available":
+      return { action: "refresh", next_step: "Für diesen Rechner ist noch nichts abgeglichen -- Abgleich anfordern" };
     case "error":
-      return { action: "refresh", next_step: NEXT_STEP.refresh };
+      return { action: "refresh", next_step: "Der letzte Abgleich ist fehlgeschlagen -- Abgleich erneut anfordern" };
     case "access_denied":
     case "revoked":
       return { action: "reconnect", next_step: NEXT_STEP.reconnect };
@@ -194,11 +218,36 @@ function actionFromMessage(status, message) {
   if (t.includes("connect a microsoft account") || t.includes("no access token")) return "connect";
   if (t.includes("sites.read")) return "reconnect";
   if (t.includes("reauth") || t.includes("not active") || status === 401) return "reconnect";
-  if (status === 404 || t.includes("no such source") || t.includes("no deployment on this machine")) return "refresh";
-  if (t.includes("no deployment") || t.includes("not usable on this machine")) return "refresh";
+  if (t.includes("offline") || t.includes("unreachable") || t.includes("fetch failed")) return "wait";
+  if (status === 404 || t.includes("no such source") || t.includes("is gone")
+    || t.includes("no deployment on this machine")) return "refresh";
+  if (t.includes("no deployment") || t.includes("not usable on this machine") || t.includes("provision")) {
+    return "refresh";
+  }
   if (t.includes("not configured") || t.includes("kwos_relay_url")) return "admin";
   if (status === 429 || status === 503 || (typeof status === "number" && status >= 500)) return "wait";
   return "support";
+}
+
+/** A sentence saying WHAT to do -- never the relay's HTTP text alone. */
+function fallbackNextStep(action, reason) {
+  const t = String(reason ?? "").toLowerCase();
+  if (t.includes("offline") || t.includes("unreachable") || t.includes("fetch failed")) {
+    return "Rechner oder Netz ist nicht erreichbar -- sobald wieder da, mit sources_status erneut fragen";
+  }
+  if (t.includes("provision") || t.includes("no deployment") || t.includes("not usable on this machine")) {
+    return "Bereitstellung für diesen Rechner anfordern -- danach mit sources_status den Stand fragen";
+  }
+  if (t.includes("no such source") || t.includes("is gone")) {
+    return "Unbekannte Quelle -- mit sources_find die richtige source_id holen";
+  }
+  if (t.includes("reauth") || t.includes("not active")) {
+    return "Microsoft-Verbindung erneuern -- die Anmeldung macht der Mensch";
+  }
+  if (t.includes("connect a microsoft account") || t.includes("no access token")) {
+    return "Zuerst ein Microsoft-Konto verbinden -- danach sources_prepare erneut aufrufen";
+  }
+  return NEXT_STEP[action] ?? NEXT_STEP.support;
 }
 
 function failure(err, extra = {}) {
@@ -206,13 +255,28 @@ function failure(err, extra = {}) {
   const status = typeof err?.status === "number" ? err.status : null;
   const reason = body && typeof body.error === "string" ? body.error : String(err?.message ?? err);
   const action = body && typeof body.action === "string" ? body.action : actionFromMessage(status, reason);
-  const nextStep = body && typeof body.next_step === "string" ? body.next_step : NEXT_STEP[action] ?? null;
+  const nextStep = body && typeof body.next_step === "string" ? body.next_step : fallbackNextStep(action, reason);
   return {
     ok: false,
     reason,
+    next_step: nextStep,
     next_action: { action, next_step: nextStep },
+    retry_tool: RETRY_TOOL[action] ?? null,
     ...(body && Array.isArray(body.missing) ? { missing: body.missing } : {}),
     ...extra,
+  };
+}
+
+/** An answer to a call that cannot be made as asked -- still actionable, not a bare sentence. */
+function badInput({ reason, nextStep, action = "refresh", retryTool = null, machine, machineSource }) {
+  return {
+    ok: false,
+    reason,
+    next_step: nextStep,
+    next_action: { action, next_step: nextStep },
+    retry_tool: retryTool,
+    machine,
+    machine_source: machineSource,
   };
 }
 
@@ -248,11 +312,13 @@ async function find(args) {
   const kind = typeof args.kind === "string" ? args.kind.trim() : "";
   if (kind !== "" && !SOURCE_KINDS.includes(kind)) {
     return {
-      ok: false,
-      reason: `Unbekannte Art "${kind}" -- erlaubt sind ${SOURCE_KINDS.join(", ")}.`,
-      next_action: { action: "support", next_step: NEXT_STEP.support },
-      machine,
-      machine_source: machineSource,
+      ...badInput({
+        reason: `Unbekannte Art "${kind}" -- erlaubt sind ${SOURCE_KINDS.join(", ")}.`,
+        nextStep: "Ohne `kind` suchen oder onedrive/sharepoint wählen",
+        action: "support",
+        machine,
+        machineSource,
+      }),
     };
   }
   const query = typeof args.query === "string" ? args.query.trim().toLowerCase() : "";
@@ -302,11 +368,13 @@ async function describe(args) {
   const sourceId = typeof args.source_id === "string" ? args.source_id.trim() : "";
   if (sourceId === "") {
     return {
-      ok: false,
-      reason: "source_id fehlt.",
-      next_action: { action: "refresh", next_step: "Mit sources_find die source_id holen" },
-      machine,
-      machine_source: machineSource,
+      ...badInput({
+        reason: "source_id fehlt.",
+        nextStep: "Mit sources_find die source_id holen",
+        retryTool: "sources_find",
+        machine,
+        machineSource,
+      }),
     };
   }
 
@@ -355,11 +423,13 @@ async function prepare(args) {
   const sourceId = typeof args.source_id === "string" ? args.source_id.trim() : "";
   if (sourceId === "") {
     return {
-      ok: false,
-      reason: "source_id fehlt.",
-      next_action: { action: "refresh", next_step: "Mit sources_find die source_id holen" },
-      machine,
-      machine_source: machineSource,
+      ...badInput({
+        reason: "source_id fehlt.",
+        nextStep: "Mit sources_find die source_id holen",
+        retryTool: "sources_find",
+        machine,
+        machineSource,
+      }),
     };
   }
 
@@ -396,7 +466,9 @@ async function prepare(args) {
       ...base,
       ok: false,
       reason: "Keine Sitzung bekannt -- keine source_id kann zugeordnet werden.",
+      next_step: NEXT_STEP.support,
       next_action: { action: "support", next_step: NEXT_STEP.support },
+      retry_tool: null,
     };
   }
 
@@ -452,11 +524,13 @@ async function status(args) {
   const sourceId = typeof args.source_id === "string" ? args.source_id.trim() : "";
   if (sourceId === "") {
     return {
-      ok: false,
-      reason: "source_id fehlt.",
-      next_action: { action: "refresh", next_step: "Mit sources_find die source_id holen" },
-      machine,
-      machine_source: machineSource,
+      ...badInput({
+        reason: "source_id fehlt.",
+        nextStep: "Mit sources_find die source_id holen",
+        retryTool: "sources_find",
+        machine,
+        machineSource,
+      }),
     };
   }
   const jobId = typeof args.job_id === "string" && args.job_id.trim() !== "" ? args.job_id.trim() : null;

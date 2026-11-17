@@ -58,7 +58,7 @@ test("sources_find: eigene Maschine, kurze Liste ohne Deployments, Zustand je Qu
     const out = jsonOf(await handleSourcesTool("sources_find", {}));
     assert.equal(out.ok, true);
     assert.equal(out.machine, HOST);
-    assert.equal(out.machine_source, "hostname");
+    assert.equal(out.machine_source, "local");
     assert.deepEqual(out.summary, { total: 2, ready: 1, partial: 0, waiting: 0, unavailable: 1, attention: 0 });
     assert.equal(out.sources.length, 2);
     assert.deepEqual(out.sources[0], {
@@ -215,10 +215,84 @@ test("Ablehnung: der Text des Relays bleibt im Wortlaut, die Handlung kommt aus 
     const out = jsonOf(await handleSourcesTool("sources_prepare", { source_id: "src_1", session_id: "sess-self" }));
     assert.equal(out.ok, false);
     assert.equal(out.reason, "the connection behind this source is not active -- reconnect");
+    assert.equal(out.next_step, "Verbindung erneuern");
     assert.deepEqual(out.next_action, { action: "reconnect", next_step: "Verbindung erneuern" });
+    assert.equal(out.retry_tool, "sources_prepare");
+    assert.equal(out.machine_source, "local");
   } finally {
     mock.restore();
   }
+});
+
+test("Ablehnung 409: fehlende Quellen reisen als `missing` mit, der nächste Schritt ist sources_prepare", async () => {
+  const mock = installFetchMock(() => Promise.resolve(refusal(409, {
+    error: "some sources are not usable on this machine",
+    action: "refresh",
+    next_step: "Bereitstellung für diesen Rechner anfordern",
+    missing: ["src_2", "src_3"],
+  })));
+  try {
+    const out = jsonOf(await handleSourcesTool("sources_prepare", { source_id: "src_1", session_id: "sess-self" }));
+    assert.equal(out.ok, false);
+    assert.deepEqual(out.missing, ["src_2", "src_3"]);
+    assert.equal(out.retry_tool, "sources_prepare");
+    assert.equal(out.next_step, "Bereitstellung für diesen Rechner anfordern");
+    assert.equal(out.machine_source, "local");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("Ablehnung: reauth, fehlende Verbindung, unbekannte Quelle und Offline nennen je ihren Schritt", async () => {
+  const cases = [
+    {
+      status: 401, body: { error: "no access token", action: "connect", next_step: "Microsoft-Konto verbinden" },
+      action: "connect", retry: "sources_prepare",
+    },
+    {
+      status: 401, body: { error: "reauth required", action: "reconnect", next_step: "Verbindung erneuern" },
+      action: "reconnect", retry: "sources_prepare",
+    },
+    {
+      status: 404, body: { error: "no such source", action: "refresh", next_step: "Liste neu laden" },
+      action: "refresh", retry: "sources_prepare",
+    },
+  ];
+  for (const c of cases) {
+    const mock = installFetchMock(() => Promise.resolve(refusal(c.status, c.body)));
+    try {
+      const out = jsonOf(await handleSourcesTool("sources_status", { source_id: "src_1" }));
+      assert.equal(out.ok, false, c.body.error);
+      assert.equal(out.next_action.action, c.action, c.body.error);
+      assert.equal(out.next_step, c.body.next_step, c.body.error);
+      assert.equal(out.retry_tool, c.retry, c.body.error);
+      assert.equal(out.machine_source, "local", c.body.error);
+    } finally {
+      mock.restore();
+    }
+  }
+
+  // A bare network failure has no relay body: the answer still names the action and the tool.
+  const offline = installFetchMock(() => Promise.reject(new Error("fetch failed")));
+  try {
+    const out = jsonOf(await handleSourcesTool("sources_status", { source_id: "src_1" }));
+    assert.equal(out.ok, false);
+    assert.equal(out.reason, "fetch failed");
+    assert.equal(out.next_action.action, "wait");
+    assert.equal(out.retry_tool, "sources_status");
+    assert.match(out.next_step, /nicht erreichbar/);
+  } finally {
+    offline.restore();
+  }
+});
+
+test("fehlende source_id: eine handlungsfähige Antwort, kein nackter Satz", async () => {
+  const out = jsonOf(await handleSourcesTool("sources_describe", {}));
+  assert.equal(out.ok, false);
+  assert.equal(out.reason, "source_id fehlt.");
+  assert.equal(out.next_step, "Mit sources_find die source_id holen");
+  assert.equal(out.retry_tool, "sources_find");
+  assert.equal(out.machine_source, "local");
 });
 
 test("sources_status: liest nur, wartet nicht, und gibt den Pfad erst ab ready/partial", async () => {
