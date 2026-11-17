@@ -63,6 +63,22 @@ test("bot_jobs baut die Liste mit ihren Filtern", async () => {
   assert.match(bodyOf(res), /"job_id": "j1"/);
 });
 
+// DIE FRAGE "WAS LAEUFT GERADE / WAS WAR ZULETZT?" ist der Grund, warum das Werkzeug existiert.
+// Der Relay listet von alt nach neu; hier ist die Vorgabe neueste zuerst, und `status=leased`
+// nennt den laufenden Lauf.
+test("bot_jobs zeigt ohne Angabe die neuesten zuerst", async () => {
+  const { calls, fetchImpl } = spy(200, { bot_id: "bot_1", jobs: [] });
+  await callTool("bot_jobs", { bot_id: "bot_1" }, undefined, { fetchImpl, headers });
+  assert.match(calls[0].url, /\?order=newest$/);
+});
+
+test("bot_jobs findet den laufenden Lauf ueber seinen Zustand", async () => {
+  const { calls, fetchImpl } = spy(200, { bot_id: "bot_1", jobs: [{ job_id: "j9", status: "leased" }] });
+  const res = await callTool("bot_jobs", { bot_id: "bot_1", status: "leased" }, undefined, { fetchImpl, headers });
+  assert.match(calls[0].url, /status=leased/);
+  assert.match(bodyOf(res), /"status": "leased"/);
+});
+
 test("bot_job liest einen Lauf samt Ausgabe", async () => {
   const { calls, fetchImpl } = spy(200, { ok: true, job: { job_id: "j1", status: "done", output: "Ein Witz." } });
   const res = await callTool("bot_job", { bot_id: "bot_1", job_id: "j1" }, undefined, { fetchImpl, headers });

@@ -122,8 +122,10 @@ const TOOLS = [
   {
     name: "bot_jobs",
     description:
-      "Die Laeufe EINES Bots, die mir gehoeren (GET /v1/bots/:bot/jobs) -- der Zustand ohne den "
-      + "Umweg ueber die Oberflaeche. Die Liste enthaelt KEIN `output`; dafuer `bot_job`. "
+      "Die Laeufe EINES Bots, die mir gehoeren (GET /v1/bots/:bot/jobs) -- Historie und der "
+      + "laufende Lauf ohne den Umweg ueber eine Oberflaeche. Neueste zuerst, sofern `order` nichts "
+      + "anderes sagt. Die Liste enthaelt KEIN `output`, dafuer `bot_job`. "
+      + "DER LAUFENDE LAUF ist `status: \"leased\"`; was noch wartet, ist `pending`. "
       + "Filter: `status`, `job_id`, `order` (oldest|newest), `limit`. Ein unbekannter Filter oder "
       + "Status wird vom Relay abgelehnt und kommt woertlich zurueck.",
     inputSchema: {
@@ -135,7 +137,7 @@ const TOOLS = [
           description: "Nur Laeufe in diesem Zustand: pending, leased, done, failed, cancelled.",
         },
         job_id: { type: "string", description: "Genau diesen Lauf, auch wenn er aelter als die Seite ist." },
-        order: { type: "string", description: "oldest (Vorgabe) oder newest -- der Relay lehnt alles andere ab." },
+        order: { type: "string", description: "newest (Vorgabe) oder oldest -- der Relay lehnt alles andere ab." },
         limit: { type: "number", description: "Wie viele Zeilen (der Relay deckelt selbst)." },
       },
       required: ["bot_id"],
@@ -632,6 +634,10 @@ function idArg(tool, args, key) {
 /** Die Abfrage der Lauf-Liste, als Query gebaut -- ein Wert, der nicht passt, wird nicht geraten. */
 function jobsQuery(args) {
   const query = new URLSearchParams();
+  // NEUESTE ZUERST, WENN NICHT ANDERS GESAGT (WI 11619349): der Relay listet von alt nach neu --
+  // sinnvoll fuer einen Abarbeiter, falsch fuer die Frage "was laeuft gerade, was war zuletzt?".
+  // Die Reihenfolge ist hier eine Vorgabe des Werkzeugs, keine zweite Wahrheit: `order` gewinnt.
+  if (args?.order === undefined) query.set("order", "newest");
   for (const key of ["status", "job_id", "order"]) {
     const value = args?.[key];
     if (value === undefined) continue;
