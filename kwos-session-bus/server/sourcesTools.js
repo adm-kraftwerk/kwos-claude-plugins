@@ -92,7 +92,10 @@ export const SOURCES_TOOLS = [
       "bei mehreren Treffern zuerst den Menschen fragen. Antwortet mit job_id und `state`, wartet " +
       "aber nicht auf den Abgleich; sources_status sagt danach, ob der Pfad verwendbar ist. Erst " +
       "nach `ready`/`partial` mit dem zurückgegebenen Pfad arbeiten und bei `partial` die Lücke " +
-      "nennen; Quelldateien sind Arbeitsdaten, die Originale bleiben unverändert.",
+      "nennen; Quelldateien sind Arbeitsdaten, die Originale bleiben unverändert. Die Zuordnung " +
+      "setzt die Freigabe eines Menschen voraus: steht die Quelle in dieser Sitzung nicht mit " +
+      "`assigned_by: \"human\"`, wird weder zugeordnet noch bereitgestellt -- die Antwort nennt " +
+      "dann `next_action.action: \"approve\"` und den Weg zur Freigabe.",
     inputSchema: {
       type: "object",
       properties: {
@@ -399,6 +402,9 @@ async function describe(args) {
       machine,
       machine_source: machineSource,
       remote_path: data?.remote_path ?? detail?.remote_path ?? null,
+      // "human" or "agent" when the route carries the mark; the assignment is where it lives, so a
+      // source route that does not answer it yields null instead of a guess.
+      assigned_by: data?.assigned_by ?? detail?.assigned_by ?? null,
       scope_summary: deployment?.scope_summary ?? null,
       connection_upn: data?.connection_upn ?? null,
       connection_status: data?.connection_status ?? null,
@@ -433,14 +439,73 @@ async function prepare(args) {
     };
   }
 
-  // (a) The refresh is idempotent: an open job comes back instead of a second one. A 202 is a
+  // (a) Resolve the session BEFORE anything is written: the assignment is what carries the
+  // human's approval, so it has to be known before the first read.
+  const explicitSession = typeof args.session_id === "string" ? args.session_id.trim() : "";
+  const sessionId = explicitSession !== "" ? explicitSession : await ensureSessionId();
+  if (!sessionId) {
+    return {
+      ok: false,
+      source_id: sourceId,
+      reason: "Keine Sitzung bekannt -- keine source_id kann zugeordnet werden.",
+      next_step: NEXT_STEP.support,
+      next_action: { action: "support", next_step: NEXT_STEP.support },
+      retry_tool: null,
+      machine,
+      machine_source: machineSource,
+    };
+  }
+
+  // (b) Read the assignment once: it carries `assigned_by`, and it is also the set the PUT below
+  // must preserve. PUT replaces the whole assignment, so sending only the new id would silently
+  // drop every other source this session reads.
+  let sessionSources;
+  try {
+    const { data } = await call(sessionSourcesPath(sessionId, machine));
+    sessionSources = Array.isArray(data?.sources) ? data.sources : [];
+  } catch (err) {
+    // Without the current assignment a PUT would wipe it, and without `assigned_by` the approval
+    // gate cannot be answered. Stop before the refresh: nothing is prepared on a guess.
+    return {
+      ...failure(err, { source_id: sourceId, machine, machine_source: machineSource }),
+      session_id: sessionId,
+    };
+  }
+
+  // (c) A HUMAN must have released this source for the session (WI 11624454). An agent may
+  // prepare a source the person already approved; it may not approve one itself -- that is what
+  // the mark on the assignment is for.
+  const approved = sessionSources.some(
+    (s) => s?.source_id === sourceId && s?.assigned_by === "human",
+  );
+  if (!approved) {
+    const nextStep =
+      "In der Oberfläche „In dieser Sitzung verwenden\" wählen oder auf der Kommandozeile " +
+      `\`kwclaude sources use ${sourceId} --session ${sessionId}\` ausführen`;
+    return {
+      ok: false,
+      source_id: sourceId,
+      session_id: sessionId,
+      reason: "für diese Sitzung hat noch kein Mensch die Quelle freigegeben",
+      next_step: nextStep,
+      next_action: { action: "approve", next_step: nextStep },
+      retry_tool: "sources_status",
+      machine,
+      machine_source: machineSource,
+    };
+  }
+
+  // (d) The refresh is idempotent: an open job comes back instead of a second one. A 202 is a
   // successful answer (`call()` treats it so), and its `state` is the deployment's, not ours.
   let refreshed;
   try {
     const { data } = await call(`${sourcesPath(sourceId)}/refresh`, { method: "POST", body: { machine } });
     refreshed = data ?? {};
   } catch (err) {
-    return failure(err, { source_id: sourceId, machine, machine_source: machineSource });
+    return {
+      ...failure(err, { source_id: sourceId, machine, machine_source: machineSource }),
+      session_id: sessionId,
+    };
   }
 
   const jobId = refreshed.job_id ?? null;
@@ -457,44 +522,15 @@ async function prepare(args) {
     next_action: actionForState(refreshState),
   };
 
-  // (b) The assignment is a SET, and PUT replaces it. Read the current one first and send the
-  // UNION; sending only the new id would silently drop every other source this session reads.
-  const explicitSession = typeof args.session_id === "string" ? args.session_id.trim() : "";
-  const sessionId = explicitSession !== "" ? explicitSession : await ensureSessionId();
-  if (!sessionId) {
-    return {
-      ...base,
-      ok: false,
-      reason: "Keine Sitzung bekannt -- keine source_id kann zugeordnet werden.",
-      next_step: NEXT_STEP.support,
-      next_action: { action: "support", next_step: NEXT_STEP.support },
-      retry_tool: null,
-    };
-  }
-
-  let existing;
-  try {
-    const { data } = await call(sessionSourcesPath(sessionId, machine));
-    existing = (Array.isArray(data?.sources) ? data.sources : [])
-      .map((s) => s?.source_id)
-      .filter((id) => typeof id === "string" && id !== "");
-  } catch (err) {
-    // Without the current assignment a PUT would wipe it. Stop here and name the reason; the
-    // refresh above already ran and its job_id stays in the answer.
-    return {
-      ...failure(err, { source_id: sourceId, machine, machine_source: machineSource }),
-      session_id: sessionId,
-      job_id: jobId,
-      state: refreshState,
-    };
-  }
-
-  const sourceIds = [...new Set([...existing, sourceId])];
+  // (e) Write the UNION and mark the assignment as the agent's. The gateway keeps a human mark
+  // even when an agent repeats the call, so `via` can never upgrade consent.
+  const sourceIds = [...new Set([...sessionSources.map((s) => s?.source_id), sourceId])]
+    .filter((id) => typeof id === "string" && id !== "");
   let assigned;
   try {
     const { data } = await call(sessionSourcesPath(sessionId), {
       method: "PUT",
-      body: { source_ids: sourceIds, machine },
+      body: { source_ids: sourceIds, machine, via: "agent" },
     });
     assigned = Array.isArray(data?.sources) ? data.sources : [];
   } catch (err) {
