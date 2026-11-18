@@ -164,7 +164,10 @@ test("sources_prepare: refresh anfordern und die Sitzungs-Zuordnung VEREINIGEN, 
         { source_id: "src_1", generation: 1, state: "queued" },
       ] }));
     }
-    return Promise.resolve(ok({ sources: [{ source_id: "src_old" }] }));
+    return Promise.resolve(ok({ sources: [
+      { source_id: "src_old", assigned_by: "human" },
+      { source_id: "src_1", assigned_by: "human" },
+    ] }));
   });
   try {
     const out = jsonOf(await handleSourcesTool("sources_prepare", {
@@ -183,12 +186,13 @@ test("sources_prepare: refresh anfordern und die Sitzungs-Zuordnung VEREINIGEN, 
     assert.ok(put, "die Zuordnung wurde geschrieben");
     assert.deepEqual(put.body.source_ids, ["src_old", "src_1"]);
     assert.equal(put.body.machine, "kwhive-1");
+    assert.equal(put.body.via, "agent", "die Zuordnung ist als die eines Agenten markiert");
   } finally {
     mock.restore();
   }
 });
 
-test("sources_prepare: ohne lesbare Zuordnung wird NICHTS geschrieben", async () => {
+test("sources_prepare: ohne lesbare Zuordnung wird WEDER bereitgestellt NOCH geschrieben", async () => {
   const calls = [];
   const mock = installFetchMock((url, init = {}) => {
     calls.push({ url, method: init.method ?? "GET" });
@@ -198,8 +202,94 @@ test("sources_prepare: ohne lesbare Zuordnung wird NICHTS geschrieben", async ()
   try {
     const out = jsonOf(await handleSourcesTool("sources_prepare", { source_id: "src_1", session_id: "sess-self" }));
     assert.equal(out.ok, false);
-    assert.equal(out.job_id, "job_1");
+    assert.equal(out.reason, "the sources could not be read");
+    assert.equal(out.session_id, "sess-self");
     assert.equal(calls.some((c) => c.method === "PUT"), false, "kein PUT auf einer geratenen Zuordnung");
+    assert.equal(
+      calls.some((c) => String(c.url).endsWith("/refresh")), false,
+      "ohne lesbare Zuordnung wird auch nichts bereitgestellt",
+    );
+  } finally {
+    mock.restore();
+  }
+});
+
+test("sources_prepare: ohne menschliche Freigabe wird NICHT zugeordnet und NICHT bereitgestellt", async () => {
+  const calls = [];
+  let rows = [];
+  const mock = installFetchMock((url, init = {}) => {
+    calls.push({ url: String(url), method: init.method ?? "GET" });
+    return Promise.resolve(ok({ sources: rows }));
+  });
+  try {
+    // "not assigned at all" and "assigned by an agent" are the same refusal: neither is consent.
+    for (const row of [[], [{ source_id: "src_1", assigned_by: "agent" }]]) {
+      rows = row;
+      calls.length = 0;
+      const out = jsonOf(await handleSourcesTool("sources_prepare", {
+        source_id: "src_1", session_id: "sess-self", machine: "kwhive-1",
+      }));
+      assert.equal(out.ok, false);
+      assert.equal(out.reason, "für diese Sitzung hat noch kein Mensch die Quelle freigegeben");
+      assert.equal(out.next_action.action, "approve");
+      assert.equal(out.next_action.next_step, out.next_step);
+      assert.match(out.next_step, /In dieser Sitzung verwenden/);
+      assert.match(out.next_step, /kwclaude sources use src_1 --session sess-self/);
+      assert.equal(out.retry_tool, "sources_status");
+      assert.equal(out.source_id, "src_1");
+      assert.equal(out.session_id, "sess-self");
+      assert.equal(out.machine, "kwhive-1");
+      assert.equal(out.machine_source, "explicit");
+      assert.equal(calls.some((c) => c.method === "PUT"), false, "keine Zuordnung ohne Freigabe");
+      assert.equal(
+        calls.some((c) => String(c.url).endsWith("/refresh")), false,
+        "ohne Freigabe wird nichts bereitgestellt",
+      );
+    }
+  } finally {
+    mock.restore();
+  }
+});
+
+test("sources_prepare: mit menschlicher Freigabe läuft der bisherige Weg -- Abgleich und Zuordnung mit via agent", async () => {
+  const calls = [];
+  const mock = installFetchMock((url, init = {}) => {
+    calls.push({ url: String(url), method: init.method ?? "GET", body: init.body ? JSON.parse(init.body) : null });
+    if (String(url).endsWith("/refresh")) {
+      return Promise.resolve(ok({ job_id: "job_1", created: true, state: "queued" }, 202));
+    }
+    if (init.method === "PUT") {
+      return Promise.resolve(ok({ sources: [
+        { source_id: "src_old", generation: 1, state: "ready", assigned_by: "human" },
+        { source_id: "src_1", generation: 2, state: "queued", assigned_by: "agent" },
+      ] }));
+    }
+    return Promise.resolve(ok({ sources: [
+      { source_id: "src_old", assigned_by: "human" },
+      { source_id: "src_1", assigned_by: "human" },
+    ] }));
+  });
+  try {
+    const out = jsonOf(await handleSourcesTool("sources_prepare", {
+      source_id: "src_1", session_id: "sess-self", machine: "kwhive-1",
+    }));
+    assert.equal(out.ok, true);
+    assert.equal(out.job_id, "job_1");
+    assert.equal(out.state, "queued");
+    assert.equal(out.session_id, "sess-self");
+
+    const put = calls.find((c) => c.method === "PUT");
+    assert.ok(put, "die Zuordnung wurde geschrieben");
+    assert.deepEqual(put.body.source_ids, ["src_old", "src_1"]);
+    assert.equal(put.body.machine, "kwhive-1");
+    assert.equal(put.body.via, "agent");
+
+    const read = calls.findIndex(
+      (c) => c.method === "GET" && /\/sessions\/sess-self\/sources\?machine=/.test(c.url),
+    );
+    const refresh = calls.findIndex((c) => c.url.endsWith("/refresh"));
+    assert.ok(read > -1 && refresh > -1);
+    assert.ok(read < refresh, "die Freigabe wird VOR dem Abgleich gelesen");
   } finally {
     mock.restore();
   }
