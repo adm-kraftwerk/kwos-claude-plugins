@@ -448,10 +448,10 @@ export const TOOLS = [
 // The version the MCP client sees in the handshake. It names the SAME artifact as plugin.json /
 // marketplace.json, so it moves with them -- it had been left at 0.5.0 through the 0.5.1 bump,
 // and again at 0.9.2 through every bump up to 0.9.11 (found 2026-11-10 with the bot_memory bump).
-const server = new Server(
-  { name: "kwos-session-bus", version: "0.9.15" },
-  { capabilities: { tools: {} } }
-);
+// Exported so a test can hold it against package.json: the handshake version is the ONLY place a
+// client reads which artifact it loaded, and it has been left behind at every bump so far.
+export const SERVER_INFO = { name: "kwos-session-bus", version: "0.9.17" };
+const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
 
 /**
  * Die Werkzeuge, die NUR eine Remote-Control-Sitzung angeboten bekommt (2026-10-19, Befund Luca).

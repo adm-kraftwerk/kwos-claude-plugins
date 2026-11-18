@@ -5,9 +5,10 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { installFetchMock } from "./helpers/fetch-mock.js";
+import { normalizeBuildPaths } from "../server/paths.js";
 
 process.env.KWOS_XID_ACCESS_TOKEN = "test-token";
-const { TOOLS, handleToolCall, callTool } = await import("../server/index.js");
+const { TOOLS, handleToolCall, callTool, SERVER_INFO } = await import("../server/index.js");
 const { config } = await import("../server/config.js");
 const collab = await import("../server/collab.js");
 config.sessionId = "sess-self";
@@ -66,6 +67,14 @@ test("handleToolCall: unbekanntes Tool wirft (kein stiller No-Op)", async () => 
 // in Produktion der ALTE MCP-Server laeuft (genau so schon einmal passiert, s. README). Waehrend
 // der Arbeit an WI 11075502 ist das Bundle zweimal veraltet gewesen. Dieser Test macht daraus
 // einen roten Test statt eines still veralteten Servers.
+// Der Handshake ist die einzige Stelle, an der ein Client liest, WELCHES Artefakt er geladen hat,
+// und sie ist bei jedem Bump hinterhergehangen (0.5.0, 0.9.2 ... 0.9.11; am 2026-11-18 stand sie
+// auf 0.9.15 bei Artefakt 0.9.16). Ein rotes Gate statt einer stillen Falschangabe.
+test("SERVER_INFO nennt dieselbe Version wie package.json", () => {
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(SERVER_INFO.version, pkg.version);
+});
+
 test("committed index.bundle.mjs entspricht dem aktuellen Quellstand", async (t) => {
   const here = fileURLToPath(new URL(".", import.meta.url));
   // esbuild ueber seine JS-API statt ueber node_modules/.bin/esbuild: der Eintrag dort ist eine
@@ -93,10 +102,18 @@ test("committed index.bundle.mjs entspricht dem aktuellen Quellstand", async (t)
       external: ["node:*"],
       logLevel: "silent",
     });
-    const fresh = readFileSync(out);
-    const committed = readFileSync(join(here, "..", "server", "index.bundle.mjs"));
+    // Byte-gleich ist der Vergleich NICHT: esbuild schreibt den Modulpfad, den es gesehen hat, als
+    // Kommentar und als Modulschluessel in das Buendel. Auf dem Mac eines verlinkten Checkouts
+    // heisst er `../../../../Users/.../node_modules/ajv/...`, auf Windows `node_modules/ajv/...` --
+    // gleicher Code, andere Bytes. Gemessen am 2026-11-18 auf dem Windows-Specimen: der hier
+    // gebaute Stand war nach dem Falten der Pfade byte-gleich, also nicht veraltet. Gefaltet wird
+    // nur der Pfad; jede Zeile Code zaehlt weiter, ein vergessenes `npm run build` bleibt rot.
+    const fresh = normalizeBuildPaths(readFileSync(out, "utf8"));
+    const committed = normalizeBuildPaths(
+      readFileSync(join(here, "..", "server", "index.bundle.mjs"), "utf8")
+    );
     assert.ok(
-      fresh.equals(committed),
+      fresh === committed,
       "server/index.bundle.mjs ist veraltet -- `npm run build` ausfuehren und die Datei mitcommitten"
     );
   } finally {
