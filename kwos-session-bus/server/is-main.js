@@ -13,20 +13,7 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-/**
- * The resolved form of a path, for comparing two spellings of the same file.
- *
- * A path that does not exist cannot be resolved; then the raw value is the honest answer. Throwing
- * here would turn a running entry point into a silent exit, which is the failure this file exists
- * to prevent.
- */
-function realPath(p, resolve) {
-  try {
-    return resolve(p);
-  } catch {
-    return p;
-  }
-}
+import { realPath } from "./paths.js";
 
 /**
  * True when `argv[1]` names the module that lives at `moduleUrl`.
